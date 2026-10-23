@@ -1,0 +1,32 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - corepack enable
+        - corepack prepare pnpm@latest --activate
+        - pnpm config set store-dir .pnpm-store
+        - pnpm install --frozen-lockfile
+        # Generate the Prisma client for the Amplify runtime (see binaryTargets
+        # in prisma/schema.prisma: native + rhel-openssl-3.0.x).
+        - npx prisma generate
+    build:
+      commands:
+        # Inject server-side runtime environment variables for Next.js SSR compute
+        # (AWS Amplify WEB_COMPUTE). Only variables that exist on the branch are written.
+        - env | grep -E '^(DATABASE_URL|NEXTAUTH_|ENCRYPTION_KEY|GOOGLE_|GEMINI_|AI_|EMAIL_|SMTP_|MAIL_FROM|SES_|AWS_SES_|S3_|SLACK_|APP_ENV|LOG_LEVEL|NEXT_PUBLIC_)' >> .env.production || true
+        # NOTE: database migrations are intentionally NOT run here.
+        # Running `prisma migrate deploy` inside the build races parallel/duplicate
+        # builds and mutates the database even when the subsequent build fails,
+        # leaving the schema ahead of the live code. Migrations run from
+        # .github/workflows/deploy-migrations.yml before the Amplify release.
+        - pnpm run build
+  artifacts:
+    baseDirectory: .next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - .next/cache/**/*
+      - .pnpm-store/**/*
+      - node_modules/**/*

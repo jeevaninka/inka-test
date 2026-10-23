@@ -1,0 +1,55 @@
+name: Deploy migrations
+
+# Runs `prisma migrate deploy` as a single, controlled step BEFORE the Amplify
+# release, using the direct (non-pooled) database URL.
+#
+# Why not inside amplify.yml: builds run in parallel / can be retried and can
+# fail after the migration has already been applied, leaving the database ahead
+# of the code that is actually serving traffic. One serialised job avoids that.
+#
+# Required repository secrets:
+#   DIRECT_URL  - direct Postgres connection string (no pooler), used for DDL
+#
+# The workflow must complete successfully before the Amplify release is triggered.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'prisma/migrations/**'
+      - 'prisma/schema.prisma'
+
+concurrency:
+  group: deploy-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply pending migrations
+        env:
+          DATABASE_URL: ${{ secrets.DIRECT_URL }}
+        run: npx prisma migrate deploy
+
+      - name: Verify migration status
+        env:
+          DATABASE_URL: ${{ secrets.DIRECT_URL }}
+        run: npx prisma migrate status

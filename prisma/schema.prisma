@@ -1,0 +1,1230 @@
+generator client {
+  provider = "prisma-client-js"
+  // `native` keeps local dev working; `rhel-openssl-3.0.x` is required by the
+  // AWS Amplify (Amazon Linux 2023) SSR runtime. Without it the deployed app
+  // fails at runtime with "Query engine library for current platform could not be found".
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  GUEST
+}
+
+enum ProjectRole {
+  ADMIN
+  TESTER
+  VIEWER
+}
+
+enum Priority {
+  P0
+  P1
+  P2
+  P3
+}
+
+enum CaseType {
+  MANUAL
+  AUTO
+}
+
+enum CaseStatus {
+  ACTIVE
+  DRAFT
+  DEPRECATED
+}
+
+enum SuiteType {
+  SMOKE
+  REGRESSION
+  SPRINT
+  CUSTOM
+}
+
+enum RunStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  ABORTED
+}
+
+enum ResultStatus {
+  PENDING
+  PASS
+  FAIL
+  /// The case executed but the runner itself could not evaluate a check
+  /// (e.g. an unsupported Postman `pm` API). Not a product failure.
+  ERROR
+  BLOCKED
+  SKIP
+  INVALID
+  /// The run finished but the provider never returned a terminal result
+  /// before the monitoring-expiry policy was reached. Never a test failure.
+  UNAVAILABLE
+  /// The case was cancelled before it produced a result (run stopped, or
+  /// stop-on-failure). Never a test failure and distinct from SKIP.
+  CANCELLED
+}
+
+/// Durable lifecycle of a background external (Datadog) execution monitor.
+enum ExternalMonitorStatus {
+  /// Triggered at the provider; waiting for the first poll.
+  PENDING
+  /// Polling the provider for a terminal result.
+  POLLING
+  /// Terminal result retrieved and persisted.
+  COMPLETED
+  /// Monitoring expiry reached without a terminal result.
+  UNAVAILABLE
+  /// Integration-level error (auth/permission/invalid id) — not a test failure.
+  ERROR
+  /// The run was stopped: the provider test is not cancelled at the provider,
+  /// it is simply no longer awaited.
+  CANCELLED
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+  CANCELLED
+}
+
+enum VariableScope {
+  GLOBAL
+  LOCAL
+}
+
+enum SuggestionType {
+  SELF_HEAL
+  NEW_TEST_CASE
+  DEDUP_DEFECT
+}
+
+enum SuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ReleaseDecision {
+  APPROVED
+  REJECTED
+}
+
+enum CustomFieldType {
+  TEXT
+  DROPDOWN
+  MULTI_SELECT
+  BOOLEAN
+  NUMBER
+  URL
+}
+
+enum CustomFieldEntityType {
+  TEST_CASE
+  TEST_RUN
+  RELEASE
+  DEFECT
+}
+
+// ==========================================
+// MULTI-TENANT CORE
+// ==========================================
+model User {
+  id                         Int       @id @default(autoincrement())
+  email                      String    @unique
+  name                       String?
+  display_name               String?
+  image                      String?
+  password_hash              String?
+  is_approved                Boolean   @default(false)
+  email_verified             Boolean   @default(false)
+  email_verification_token   String?   @unique
+  email_verification_expires DateTime?
+  password_reset_token       String?   @unique
+  password_reset_expires     DateTime?
+  is_platform_admin          Boolean   @default(false)
+  avatar_color               String?
+  avatar_initials            String?
+  created_at                 DateTime  @default(now())
+
+  workspace_members          WorkspaceMember[]
+  project_members            ProjectMember[]
+  organization_members       OrganizationMember[]
+  organization_join_requests OrganizationJoinRequest[]
+  workspace_join_requests    WorkspaceJoinRequest[]
+  notifications              Notification[]
+  comments                   Comment[]                 @relation("CommentAuthor")
+  assigned_comments          Comment[]                 @relation("CommentAssignee")
+  resolved_comments          Comment[]                 @relation("CommentResolver")
+  review_requests_sent       ReviewRequest[]           @relation("RequestedBy")
+  review_requests_assigned   ReviewRequest[]           @relation("AssignedTo")
+  api_keys                   ApiKey[]
+  audit_logs                 AuditLog[]
+  user_prefs                 UserNotificationPrefs?
+  releases_decided           Release[]                 @relation("ReleaseDecisionBy")
+}
+
+model Organization {
+  id                  String   @id @default(cuid())
+  name                String
+  slug                String   @unique
+  allowed_domains     String[] @default([])
+  domain_join_enabled Boolean  @default(true)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  // Access suspension (platform-admin only). Null = active.
+  suspended_at   DateTime?
+  suspended_by   Int?
+  suspend_reason String?
+
+  workspaces    Workspace[]
+  members       OrganizationMember[]
+  join_requests OrganizationJoinRequest[]
+  invitations   OrganizationInvitation[]
+}
+
+model OrganizationMember {
+  organization_id String
+  user_id         Int
+  role            WorkspaceRole
+  created_at      DateTime      @default(now())
+
+  // Member-level suspension (organization admins/owners). Null = active.
+  suspended_at DateTime?
+  suspended_by Int?
+
+  organization Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([organization_id, user_id])
+  @@index([user_id])
+}
+
+model OrganizationJoinRequest {
+  id              String            @id @default(cuid())
+  user_id         Int
+  organization_id String
+  message         String?
+  status          JoinRequestStatus @default(PENDING)
+  /// Non-null only while the row is PENDING; enforces one pending request per user + org.
+  pending_key     String?           @unique
+  reviewed_by     Int?
+  reviewed_at     DateTime?
+  created_at      DateTime          @default(now())
+
+  user         User         @relation(fields: [user_id], references: [id])
+  organization Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@index([organization_id, status])
+  @@index([user_id])
+}
+
+model Workspace {
+  id              String   @id
+  organization_id String?
+  name            String
+  slug            String   @unique
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  organization          Organization?                          @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  members               WorkspaceMember[]
+  projects              Project[]
+  invitations           Invitation[]
+  org_invitation_grants OrganizationInvitationWorkspaceGrant[]
+  join_requests         WorkspaceJoinRequest[]
+  api_keys              ApiKey[]
+  audit_logs            AuditLog[]
+  integrations          Integration[]
+  notification_settings NotificationSettings?
+  webhooks              Webhook[]
+  releases              Release[]
+
+  @@index([organization_id])
+}
+
+model WorkspaceMember {
+  workspace_id   String
+  user_id        Int
+  role           WorkspaceRole
+  created_at     DateTime      @default(now())
+  last_active_at DateTime?
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([workspace_id, user_id])
+  @@index([user_id])
+}
+
+model WorkspaceJoinRequest {
+  id           String            @id @default(cuid())
+  user_id      Int
+  workspace_id String
+  message      String?
+  status       JoinRequestStatus @default(PENDING)
+  reviewed_by  Int?
+  reviewed_at  DateTime?
+  created_at   DateTime          @default(now())
+
+  user      User      @relation(fields: [user_id], references: [id])
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+
+  @@index([workspace_id, status])
+  @@index([user_id, status])
+}
+
+model Invitation {
+  id                  String           @id @default(cuid())
+  workspace_id        String
+  email               String
+  role                WorkspaceRole
+  token               String           @unique
+  invited_by          Int
+  status              InvitationStatus @default(PENDING)
+  project_assignments Json?            @default("[]")
+  accepted_at         DateTime?
+  expires_at          DateTime
+  created_at          DateTime         @default(now())
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+
+  @@index([workspace_id, status])
+  @@index([email, status])
+}
+
+model OrganizationInvitation {
+  id                  String           @id @default(cuid())
+  organization_id     String
+  email               String
+  role                WorkspaceRole    @default(MEMBER)
+  token               String           @unique
+  invited_by          Int
+  status              InvitationStatus @default(PENDING)
+  project_assignments Json?            @default("[]")
+  accepted_at         DateTime?
+  expires_at          DateTime
+  created_at          DateTime         @default(now())
+
+  organization     Organization                           @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  workspace_grants OrganizationInvitationWorkspaceGrant[]
+
+  @@index([organization_id, status])
+  @@index([email])
+}
+
+model OrganizationInvitationWorkspaceGrant {
+  id            String        @id @default(cuid())
+  invitation_id String
+  workspace_id  String
+  role          WorkspaceRole @default(MEMBER)
+  created_at    DateTime      @default(now())
+
+  invitation OrganizationInvitation @relation(fields: [invitation_id], references: [id], onDelete: Cascade)
+  workspace  Workspace              @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+
+  @@unique([invitation_id, workspace_id])
+  @@index([workspace_id])
+}
+
+model ApiKey {
+  id           String    @id @default(cuid())
+  workspace_id String
+  name         String
+  key_hash     String    @unique
+  scopes       String[]
+  created_by   Int
+  last_used_at DateTime?
+  expires_at   DateTime?
+  revoked_at   DateTime?
+  created_at   DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  creator   User      @relation(fields: [created_by], references: [id])
+
+  @@index([workspace_id, created_at])
+  @@index([created_by])
+}
+
+model Project {
+  id                         String    @id
+  workspace_id               String
+  name                       String
+  slug                       String
+  key                        String    @default("PRJ")
+  case_counter               Int       @default(0)
+  default_pm_space_id        String?
+  default_pm_space_key       String?
+  default_pm_space_name      String?
+  ai_enabled                 Boolean   @default(true)
+  email_run_complete_enabled Boolean   @default(true)
+  review_required            Boolean   @default(false)
+  api_secret                 String?
+  created_by                 Int
+  created_at                 DateTime  @default(now())
+  deleted_at                 DateTime?
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+
+  members                  ProjectMember[]
+  modules                  Module[]
+  test_cases               TestCase[]
+  test_suites              TestSuite[]
+  test_runs                TestRun[]
+  reusable_steps           ReusableStep[]
+  environments             Environment[]
+  variables                Variable[]
+  datasets                 Dataset[]
+  exploratory              ExploratorySession[]
+  ai_suggestions           AiSuggestion[]
+  activity_logs            ActivityLog[]
+  notification_settings    NotificationSettings?
+  webhooks                 Webhook[]
+  integrations             Integration[]
+  saved_views              SavedView[]
+  attachments              Attachment[]
+  releases                 Release[]
+  custom_field_definitions CustomFieldDefinition[]
+
+  @@unique([workspace_id, slug])
+  @@unique([workspace_id, key])
+  @@index([slug])
+}
+
+model ProjectMember {
+  project_id String
+  user_id    Int
+  role       ProjectRole
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([project_id, user_id])
+  @@index([user_id])
+}
+
+// ==========================================
+// TEST REPOSITORY
+// ==========================================
+model Module {
+  id          String   @id @default(cuid())
+  project_id  String
+  name        String
+  parent_id   String?
+  order_index Int      @default(0)
+  created_at  DateTime @default(now())
+
+  project        Project        @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  test_cases     TestCase[]
+  reusable_steps ReusableStep[]
+  parent         Module?        @relation("ModuleChildren", fields: [parent_id], references: [id])
+  children       Module[]       @relation("ModuleChildren")
+
+  @@index([project_id, parent_id])
+}
+
+model Dataset {
+  id          String   @id @default(cuid())
+  project_id  String
+  name        String
+  description String?
+  parameters  String[] @default([])
+  rows        Json     @default("[]")
+  created_by  Int
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  project    Project    @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  test_cases TestCase[]
+}
+
+model TestCase {
+  id              String     @id @default(cuid())
+  display_id      String
+  project_id      String
+  module_id       String?
+  title           String
+  description     String?
+  pre_conditions  String?
+  post_conditions String?
+  steps           Json
+  expected_result String?
+  priority        Priority
+  type            CaseType
+  status          CaseStatus
+  tags            String[]
+  labels          String[]
+  scenario_type   String?
+  custom_fields   Json?      @default("{}")
+
+  current_version Int @default(1)
+
+  ai_generated Boolean @default(false)
+  needs_update Boolean @default(false)
+
+  confidence_score Float?
+  flaky            Boolean @default(false)
+  flaky_score      Float?
+
+  review_status ReviewStatus?
+  external_ref  String?
+
+  created_by Int
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  updated_by Int?
+  deleted_at DateTime?
+
+  project         Project           @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  module          Module?           @relation(fields: [module_id], references: [id])
+  dataset_id      String?
+  dataset         Dataset?          @relation(fields: [dataset_id], references: [id], onDelete: SetNull)
+  local_dataset   Json?
+  versions        TestCaseVersion[]
+  suite_cases     SuiteCase[]
+  run_results     RunResult[]
+  review_requests ReviewRequest[]
+  ai_suggestions  AiSuggestion[]
+  test_case_steps TestCaseStep[]
+  variables       Variable[]
+
+  @@unique([project_id, display_id])
+  @@index([project_id, status])
+  @@index([project_id, review_status])
+  @@index([project_id, deleted_at, created_at])
+  @@index([project_id, module_id])
+  @@index([display_id])
+  @@index([dataset_id])
+}
+
+model ReusableStep {
+  id              String   @id @default(cuid())
+  title           String
+  step            String
+  expected_result String?
+  data            String?
+  steps           Json     @default("[]")
+  project_id      String
+  module_id       String?
+  created_by      Int
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  project         Project        @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  module          Module?        @relation(fields: [module_id], references: [id], onDelete: SetNull)
+  test_case_steps TestCaseStep[]
+
+  @@index([project_id])
+  @@index([module_id])
+}
+
+model TestCaseStep {
+  id                    String   @id @default(cuid())
+  test_case_id          String
+  reusable_step_id      String?
+  reusable_step_item_id String?
+  order                 Int
+  step                  String
+  expected_result       String?
+  data                  String?
+  /// Compact provider metadata (never raw provider JSON): stepId, badges,
+  /// subtest group and source test id for Datadog-imported steps.
+  meta                  String?
+  image_url             String?
+  is_outdated           Boolean  @default(false)
+  ai_generated          Boolean  @default(false)
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  test_case     TestCase        @relation(fields: [test_case_id], references: [id], onDelete: Cascade)
+  reusable_step ReusableStep?   @relation(fields: [reusable_step_id], references: [id], onDelete: SetNull)
+  run_results   RunResultStep[]
+
+  @@index([test_case_id])
+  @@index([reusable_step_id])
+}
+
+model TestCaseVersion {
+  id             String   @id @default(cuid())
+  test_case_id   String
+  version_number Int
+  steps          Json
+  pre_conditions String?
+  description    String?
+  snapshot_by    Int
+  snapshot_at    DateTime @default(now())
+
+  test_case   TestCase    @relation(fields: [test_case_id], references: [id], onDelete: Cascade)
+  run_results RunResult[]
+
+  @@unique([test_case_id, version_number])
+}
+
+// ==========================================
+// TEST EXECUTION
+// ==========================================
+model TestSuite {
+  id          String    @id
+  project_id  String
+  name        String
+  tags        String[]
+  environment String?
+  created_by  Int
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  deleted_at  DateTime?
+
+  project     Project     @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  suite_cases SuiteCase[]
+  test_runs   TestRun[]
+
+  @@index([project_id, deleted_at])
+  @@index([created_by])
+}
+
+model SuiteCase {
+  suite_id     String
+  test_case_id String
+  order_index  Int
+  assignee_id  Int?
+
+  suite     TestSuite @relation(fields: [suite_id], references: [id], onDelete: Cascade)
+  test_case TestCase  @relation(fields: [test_case_id], references: [id], onDelete: Cascade)
+
+  @@id([suite_id, test_case_id])
+  @@index([test_case_id])
+  @@index([assignee_id])
+}
+
+model TestRun {
+  id                   String    @id
+  project_id           String
+  suite_id             String?
+  release_id           String?
+  name                 String
+  environment          String
+  build_version        String?
+  assigned_to          Int?
+  status               RunStatus
+  source               String    @default("manual")
+  trigger_ref          String?
+  concurrent_run       Boolean   @default(false)
+  timebox_mins         Int?
+  run_context          Json?
+  custom_fields        Json?     @default("{}")
+  resolved_variables   Json?
+  resolved_datasets    Json?
+  started_at           DateTime?
+  completed_at         DateTime?
+  /// Monotonic generation incremented by "Rerun all". Cases queued for an older
+  /// generation can never be dispatched into the new one.
+  execution_generation Int       @default(1)
+  /// Inter-test delay gate owned by the server scheduler.
+  next_dispatch_at     DateTime?
+  /// Persisted stop request. A STOPPING run dispatches no new cases but keeps
+  /// reconciling executions that are already in flight.
+  stop_requested_at    DateTime?
+  /// DB-backed scheduler lease (in-memory locks are only a local optimization).
+  execution_lock_owner String?
+  execution_lock_until DateTime?
+  created_by           Int
+  created_at           DateTime  @default(now())
+  deleted_at           DateTime?
+
+  project Project     @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  suite   TestSuite?  @relation(fields: [suite_id], references: [id])
+  release Release?    @relation(fields: [release_id], references: [id])
+  results RunResult[]
+
+  @@index([project_id, status, created_at])
+  @@index([project_id, deleted_at, created_at])
+  @@index([release_id])
+  @@index([suite_id])
+  @@index([next_dispatch_at])
+  @@index([created_by])
+}
+
+model RunResult {
+  id                 String       @id @default(cuid())
+  run_id             String
+  test_case_id       String
+  test_version_id    String?
+  order_index        Int
+  attempt_number     Int          @default(1)
+  status             ResultStatus
+  notes              String?
+  evidence_url       String?
+  time_spent_seconds Int?
+  executed_by        Int?
+  executed_at        DateTime?
+
+  step_results      Json?
+  iteration_results Json?
+  failure_reason    String?
+  assigned_to       Int?
+  source            String  @default("manual")
+  automation_log    String?
+
+  /// Canonical case execution state: IDLE | QUEUED | RUNNING | WAITING | SETTLED.
+  /// `status` remains the canonical *outcome*; this field is the canonical queue
+  /// and lease state (run_context.caseStates is legacy and read-only).
+  execution_state       String    @default("IDLE")
+  /// Generation this attempt was queued for. A stale generation is never run.
+  execution_generation  Int       @default(1)
+  queued_at             DateTime?
+  started_at            DateTime?
+  finished_at           DateTime?
+  /// Server scheduler lease for the case currently executing.
+  lease_owner           String?
+  lease_expires_at      DateTime?
+  /// Durable provider execution id (Datadog monitor id / batch id).
+  provider_execution_id String?
+  /// Provider that executes this case: 'postman' | 'datadog'. Decides which
+  /// execution lane the case belongs to.
+  provider              String?
+  last_execution_error  String?
+  updated_at            DateTime  @default(now()) @updatedAt
+
+  run              TestRun          @relation(fields: [run_id], references: [id], onDelete: Cascade)
+  test_case        TestCase         @relation(fields: [test_case_id], references: [id])
+  test_version     TestCaseVersion? @relation(fields: [test_version_id], references: [id])
+  defects          Defect[]
+  run_result_steps RunResultStep[]
+
+  @@index([run_id, order_index])
+  @@index([run_id, test_case_id, attempt_number])
+  @@index([test_case_id, executed_at])
+  @@index([status])
+  @@index([run_id, execution_state])
+  @@index([execution_state, lease_expires_at])
+  @@index([test_version_id])
+  @@index([assigned_to])
+}
+
+model RunResultStep {
+  id                String       @id @default(cuid())
+  run_result_id     String
+  test_case_step_id String
+  order             Int
+  status            ResultStatus @default(PENDING)
+  note              String?
+
+  run_result     RunResult    @relation(fields: [run_result_id], references: [id], onDelete: Cascade)
+  test_case_step TestCaseStep @relation(fields: [test_case_step_id], references: [id], onDelete: Cascade)
+
+  @@unique([run_result_id, test_case_step_id])
+  @@index([run_result_id])
+  @@index([test_case_step_id])
+}
+
+/// Durable background-job state for asynchronous external executions.
+///
+/// One row per executed unit (a RunResult inside a run, or the single implicit
+/// result of an ad-hoc run). The row survives backend restarts so a pending
+/// provider execution is always resumed; it is the source of truth for whether
+/// a Datadog run has already been triggered (never trigger twice).
+model ExternalExecutionMonitor {
+  id              String                @id @default(cuid())
+  provider        String
+  project_id      String
+  run_id          String
+  /// Null for the implicit result of an ad-hoc run created after the trigger.
+  run_result_id   String?
+  environment     String?
+  status          ExternalMonitorStatus @default(PENDING)
+  /// Provider batch id (Datadog CI batch) when the trigger returned one.
+  batch_id        String?
+  /// Per-test execution state: [{ publicId, resultId, testType, testName, status }].
+  executions      Json                  @default("[]")
+  /// Snapshot of the trigger-time variable overrides + start URL, for audit.
+  trigger_context Json?
+  execution_rule  String?
+  attempts        Int                   @default(0)
+  last_error      String?
+  next_poll_at    DateTime              @default(now())
+  deadline_at     DateTime
+  /// Optimistic claim so two pollers never process the same row concurrently.
+  locked_until    DateTime?
+  completed_at    DateTime?
+  created_at      DateTime              @default(now())
+  updated_at      DateTime              @updatedAt
+
+  @@index([status, next_poll_at])
+  @@index([run_id])
+  @@index([run_result_id])
+}
+
+// ==========================================
+// VARIABLES & ENVIRONMENTS
+// ==========================================
+
+model Environment {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  base_url    String?
+  color       String?  @default("blue")
+  is_default  Boolean  @default(false)
+  project_id  String
+  created_by  Int
+  created_at  DateTime @default(now())
+
+  project         Project         @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  variable_values VariableValue[]
+
+  @@unique([project_id, name])
+}
+
+model Variable {
+  id            String        @id @default(cuid())
+  key           String
+  scope         VariableScope
+  project_id    String
+  test_case_id  String?
+  default_value String?
+  description   String?
+  is_secret     Boolean       @default(false)
+  created_by    Int
+  created_at    DateTime      @default(now())
+
+  project   Project         @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  test_case TestCase?       @relation(fields: [test_case_id], references: [id], onDelete: Cascade)
+  values    VariableValue[]
+
+  @@unique([test_case_id, key])
+  @@index([project_id, scope, key])
+  @@index([test_case_id])
+}
+
+model VariableValue {
+  id             String   @id @default(cuid())
+  variable_id    String
+  environment_id String
+  value          String
+  created_by     Int
+  created_at     DateTime @default(now())
+
+  variable    Variable    @relation(fields: [variable_id], references: [id], onDelete: Cascade)
+  environment Environment @relation(fields: [environment_id], references: [id], onDelete: Cascade)
+
+  @@unique([variable_id, environment_id])
+}
+
+// ==========================================
+// UNIQUE AI FEATURES & EXPLORATORY
+// ==========================================
+model ExploratorySession {
+  id         String    @id @default(cuid())
+  project_id String
+  title      String
+  charter    String?
+  raw_notes  String
+  ai_summary Json?
+  started_at DateTime  @default(now())
+  ended_at   DateTime?
+  tester_id  Int
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+}
+
+model AiSuggestion {
+  id              String           @id @default(cuid())
+  project_id      String
+  test_case_id    String?
+  run_result_id   String?
+  suggestion_type SuggestionType
+  payload         Json
+  status          SuggestionStatus @default(PENDING)
+  reviewed_by     Int?
+  reviewed_at     DateTime?
+  created_at      DateTime         @default(now())
+
+  project   Project   @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  test_case TestCase? @relation(fields: [test_case_id], references: [id])
+}
+
+model AiCall {
+  id             String   @id @default(cuid())
+  project_id     String
+  user_id        Int
+  feature        String
+  provider       String
+  model          String
+  prompt_version String
+  input_chars    Int
+  output_chars   Int?
+  duration_ms    Int?
+  status         String
+  error_message  String?
+  accepted       Boolean?
+  created_at     DateTime @default(now())
+}
+
+// ==========================================
+// COLLABORATION & NOTIFICATIONS
+// ==========================================
+model Comment {
+  id                 String    @id @default(cuid())
+  project_id         String
+  entity_type        String
+  entity_id          String
+  parent_id          String?
+  body               String
+  mentioned_user_ids Int[]
+  author_id          Int
+  resolved           Boolean   @default(false)
+  resolved_at        DateTime?
+  resolved_by_id     Int?
+  assigned_to_id     Int?
+  deleted_at         DateTime?
+  attachment_ids     String[]  @default([])
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  author     User      @relation("CommentAuthor", fields: [author_id], references: [id])
+  parent     Comment?  @relation("CommentReplies", fields: [parent_id], references: [id])
+  replies    Comment[] @relation("CommentReplies")
+  assignedTo User?     @relation("CommentAssignee", fields: [assigned_to_id], references: [id])
+  resolvedBy User?     @relation("CommentResolver", fields: [resolved_by_id], references: [id])
+
+  @@index([project_id, entity_type, entity_id])
+  @@index([assigned_to_id, resolved])
+  @@index([deleted_at])
+  @@index([author_id])
+  @@index([parent_id])
+  @@index([resolved_by_id])
+}
+
+model ReviewRequest {
+  id                        String       @id @default(cuid())
+  test_case_id              String
+  requested_by              Int
+  assigned_to               Int?
+  status                    ReviewStatus @default(PENDING)
+  comment                   String?
+  version_number_at_request Int?
+  created_at                DateTime     @default(now())
+  resolved_at               DateTime?
+
+  test_case TestCase @relation(fields: [test_case_id], references: [id], onDelete: Cascade)
+  requester User     @relation("RequestedBy", fields: [requested_by], references: [id])
+  assignee  User?    @relation("AssignedTo", fields: [assigned_to], references: [id])
+
+  @@index([test_case_id, status])
+  @@index([status, created_at])
+  @@index([assigned_to, status])
+  @@index([assigned_to])
+  @@index([requested_by])
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  user_id     Int
+  type        String
+  entity_type String
+  entity_id   String
+  action_url  String?
+  read        Boolean  @default(false)
+  metadata    Json?
+  created_at  DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, read, created_at])
+}
+
+model UserNotificationPrefs {
+  user_id               Int     @id
+  email_mentions        Boolean @default(true)
+  email_review_requests Boolean @default(true)
+  email_run_complete    Boolean @default(true)
+  slack_dm_webhook      String?
+  digest_frequency      String  @default("instant")
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// METADATA, AUDIT, & INTEGRATIONS
+// ==========================================
+model Defect {
+  id                 String    @id
+  run_result_id      String
+  test_case_id       String
+  title              String
+  description        String?
+  severity           Severity
+  local_status       String    @default("OPEN")
+  ticket_url         String?
+  external_ticket_id String?
+  ticket_status      String?
+  raised_by          Int
+  raised_at          DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+  deleted_at         DateTime?
+  last_synced_at     DateTime?
+
+  run_result RunResult @relation(fields: [run_result_id], references: [id])
+
+  @@index([run_result_id])
+  @@index([test_case_id])
+  @@index([deleted_at, local_status])
+  @@index([external_ticket_id])
+  @@index([raised_by])
+}
+
+model Attachment {
+  id                String   @id @default(cuid())
+  workspace_id      String
+  project_id        String
+  entity_type       String
+  entity_id         String
+  test_case_step_id String?
+  filename          String
+  original_filename String?
+  mime_type         String?
+  size_bytes        Int?
+  storage_type      String   @default("S3") // S3 | EXTERNAL_LINK
+  storage_key       String? // S3 key OR external URL
+  external_url      String? // For Google Drive, Dropbox, etc.
+  preview_url       String? // Thumbnail/preview URL
+  title             String? // For external links
+  description       String? // For external links
+  status            String   @default("ACTIVE") // ACTIVE | DELETED
+  uploaded_by       Int
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@index([entity_type, entity_id])
+  @@index([storage_type])
+  @@index([project_id, created_at])
+  @@index([workspace_id])
+  @@index([uploaded_by])
+}
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  project_id  String
+  user_id     Int? // null if system/webhook
+  actor_type  String   @default("user") // "user" | "system" | "ai" | "webhook"
+  action      String
+  entity_type String
+  entity_id   String
+  metadata    Json?
+  created_at  DateTime @default(now())
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@index([project_id, created_at])
+  @@index([user_id, created_at])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  workspace_id String
+  user_id      Int?
+  ip_address   String?
+  user_agent   String?
+  action       String
+  metadata     Json?
+  created_at   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [user_id], references: [id])
+
+  @@index([workspace_id, created_at])
+  @@index([user_id])
+}
+
+model Integration {
+  id             String    @id @default(cuid())
+  workspace_id   String?
+  project_id     String?
+  provider       String
+  config         Json
+  enabled        Boolean   @default(true)
+  last_synced_at DateTime?
+  created_at     DateTime  @default(now())
+
+  workspace Workspace? @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  project   Project?   @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@unique([workspace_id, provider])
+  @@unique([project_id, provider])
+  @@index([workspace_id])
+  @@index([project_id])
+}
+
+model Webhook {
+  id               String    @id @default(cuid())
+  workspace_id     String?
+  project_id       String?
+  url              String
+  secret           String
+  events           String[]
+  enabled          Boolean   @default(true)
+  failure_count    Int       @default(0)
+  last_delivery_at DateTime?
+  created_at       DateTime  @default(now())
+
+  workspace  Workspace?        @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  project    Project?          @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([workspace_id])
+  @@index([project_id])
+}
+
+model WebhookDelivery {
+  id              String    @id @default(cuid())
+  webhook_id      String
+  event_type      String
+  payload         Json
+  response_status Int?
+  response_body   String?
+  delivered_at    DateTime?
+  retry_count     Int       @default(0)
+  created_at      DateTime  @default(now())
+
+  webhook Webhook @relation(fields: [webhook_id], references: [id], onDelete: Cascade)
+
+  @@index([webhook_id, created_at])
+  @@index([created_at])
+}
+
+model SavedView {
+  id          String   @id @default(cuid())
+  project_id  String
+  user_id     Int?
+  name        String
+  entity_type String
+  filters     Json
+  is_shared   Boolean  @default(false)
+  created_at  DateTime @default(now())
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+}
+
+model NotificationSettings {
+  id                      String   @id @default(cuid())
+  workspace_id            String?  @unique
+  project_id              String?  @unique
+  slack_webhook_url       String?
+  slack_channel_tier      String   @default("essential") // off | essential | all | custom
+  slack_dm_tier           String   @default("essential")
+  in_app_tier             String   @default("all")
+  email_tier              String   @default("essential")
+  cross_post_to_workspace Boolean  @default(false)
+  custom_events_matrix    Json?
+  email_enabled           Boolean  @default(true)
+  updated_at              DateTime @updatedAt
+
+  workspace Workspace? @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  project   Project?   @relation(fields: [project_id], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// RELEASES & RELEASE TICKETS
+// ==========================================
+model Release {
+  id            String    @id @default(cuid())
+  workspace_id  String
+  project_id    String
+  name          String
+  due_date      DateTime?
+  external_ref  String?
+  custom_fields Json?     @default("{}")
+
+  decision       ReleaseDecision?
+  decision_by_id Int?
+  decision_at    DateTime?
+  decision_note  String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  workspace   Workspace       @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  project     Project         @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  decision_by User?           @relation("ReleaseDecisionBy", fields: [decision_by_id], references: [id])
+  runs        TestRun[]
+  tickets     ReleaseTicket[]
+
+  @@index([project_id, created_at])
+  @@index([workspace_id])
+}
+
+model ReleaseTicket {
+  id            String   @id @default(cuid())
+  release_id    String
+  ticket_key    String
+  title         String?
+  ticket_status String?
+  ticket_url    String?
+  exempt        Boolean  @default(false)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  release Release @relation(fields: [release_id], references: [id], onDelete: Cascade)
+
+  @@unique([release_id, ticket_key])
+  @@index([release_id])
+}
+
+// ==========================================
+// CUSTOM FIELDS / PROPERTIES
+// ==========================================
+model CustomFieldDefinition {
+  id          String                @id @default(cuid())
+  project_id  String
+  entity_type CustomFieldEntityType @default(TEST_CASE)
+  name        String
+  key         String
+  type        CustomFieldType
+  description String?
+  options     Json? // string[] for DROPDOWN / MULTI_SELECT
+  default_val Json?
+  required    Boolean               @default(false)
+  order       Int                   @default(0)
+  created_at  DateTime              @default(now())
+  updated_at  DateTime              @updatedAt
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@unique([project_id, entity_type, key])
+  @@index([project_id, entity_type, order])
+}
