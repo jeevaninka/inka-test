@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -485,10 +486,13 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
   const currentCase = useMemo(() => (currentResult ? getCase(currentResult.testCaseId) : null), [currentResult, getCase]);
 
   // Load project environments for badge and base URL display
-  const [environments, setEnvironments] = useState<any[]>([]);
-  useEffect(() => {
-    getEnvironmentsAction(slug).then((envs) => setEnvironments(envs)).catch(() => {});
-  }, [slug]);
+  const environmentsQuery = useQuery({
+    queryKey: ['project-environments', slug],
+    queryFn: () => getEnvironmentsAction(slug),
+    enabled: Boolean(slug),
+    staleTime: 60_000,
+  });
+  const environments = environmentsQuery.data ?? [];
 
   // Dataset & Iteration Detection
   const datasetInfo = useMemo(() => {
@@ -870,8 +874,8 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
 
   // Step layout mode: 'table' (side-by-side) or 'stacked' (full-width flow)
   const [stepLayout, setStepLayout] = useState<'table' | 'stacked'>(() => {
-    if (typeof window !== 'undefined') return (sessionStorage.getItem('inka_step_layout') as any) || 'stacked';
-    return 'stacked';
+    if (typeof window !== 'undefined') return (sessionStorage.getItem('inka_step_layout') as any) || 'table';
+    return 'table';
   });
 
   const toggleStepLayout = (layout: 'table' | 'stacked') => {
@@ -906,7 +910,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
   // Datadog execution is asynchronous: while the durable monitor waits for the
   // provider result the case is explicitly "Awaiting Results" (never a failure).
   const isAwaitingExternal =
-    currentCase && getCaseAutomationSource(currentCase) === 'datadog' && effectiveStatus === 'pending';
+    currentCase && getCaseAutomationSource(currentCase) === 'datadog' && effectiveStatus === 'pending' && ['RUNNING', 'QUEUED', 'WAITING'].includes(String(currentResult?.caseState || currentResult?.executionState || '').toUpperCase());
   const auditLogs = useMemo(() => (stepResults._auditLog as any[]) || [], [stepResults._auditLog]);
 
   const [isExecutingExternalLocal, setIsExecutingExternalLocal] = useState(false);
@@ -2612,7 +2616,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
       <header className="h-12 border-b border-white/10 bg-card/70 flex items-center shrink-0 z-30">
         {/* Left Column: Matches Sidebar Width when open */}
         {leftRailOpen ? (
-          <div className="w-64 border-r border-white/10 shrink-0 h-12 flex items-center justify-between px-3">
+          <div className="w-60 xl:w-64 border-r border-white/10 shrink-0 h-12 flex items-center justify-between px-3">
             <span className="font-semibold text-muted-foreground uppercase tracking-wider text-[11px]">
               Cases
             </span>
@@ -2621,6 +2625,8 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                 variant="ghost"
                 size="sm"
                 onClick={() => setLeftRailOpen(false)}
+                aria-label="Collapse cases sidebar"
+                title="Collapse cases sidebar"
                 className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground cursor-pointer rounded-lg hover:bg-white/10 transition-colors"
               >
                 <PanelLeftClose className="h-4 w-4" />
@@ -2634,6 +2640,8 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                 variant="ghost"
                 size="sm"
                 onClick={() => setLeftRailOpen(true)}
+                aria-label="Expand cases sidebar"
+                title="Expand cases sidebar"
                 className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground cursor-pointer rounded-lg hover:bg-white/10 transition-colors"
               >
                 <PanelLeftOpen className="h-4 w-4 text-primary" />
@@ -2683,30 +2691,34 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                 variant="outline"
                 size="sm"
                 onClick={() => void handleRunLinkedCase(false)}
-                disabled={runningLinkedCase || runBusy}
+                disabled={runningLinkedCase || isAwaitingExternal}
                 className="h-7 px-2.5 text-xs font-semibold gap-1.5 cursor-pointer border-primary/30 text-primary hover:bg-primary/10 rounded-r-none"
                 title={
-                  runningLinkedCase || runBusy
-                    ? 'Wait for the running execution to finish before re-running'
-                    : 'Queue a new attempt through the run queue and lock'
+                  runningLinkedCase
+                    ? 'Wait for the current execution to finish before running'
+                    : isAwaitingExternal
+                    ? 'Wait for results from the provider'
+                    : 'Queue a new attempt through the run queue'
                 }
               >
                 {runningLinkedCase ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : currentResult?.status === 'pending' && !isAwaitingExternal ? (
+                  <Play className="h-3.5 w-3.5" />
                 ) : (
                   <RotateCcw className="h-3.5 w-3.5" />
                 )}
-                <span>Re-run</span>
+                <span>{currentResult?.status === 'pending' && !isAwaitingExternal ? 'Run' : 'Re-run'}</span>
               </Button>
               <Popover open={runnerOverridesOpen} onOpenChange={setRunnerOverridesOpen}>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={runningLinkedCase || runBusy}
+                    disabled={runningLinkedCase || isAwaitingExternal}
                     className="h-7 w-6 p-0 cursor-pointer border-primary/30 text-primary hover:bg-primary/10 rounded-l-none border-l-0"
-                    aria-label={`Re-run with different ${linkedProvider} settings`}
-                    title="Re-run with different settings…"
+                    aria-label={`${currentResult?.status === 'pending' && !isAwaitingExternal ? 'Run' : 'Re-run'} with different ${linkedProvider} settings`}
+                    title="${currentResult?.status === 'pending' && !isAwaitingExternal ? 'Run' : 'Re-run'} with different settings…"
                   >
                     <ChevronDown className="h-3.5 w-3.5" />
                   </Button>
@@ -2719,7 +2731,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                       ) : (
                         <DatadogLogo className="h-3.5 w-3.5" />
                       )}
-                      <span>Re-run with different settings…</span>
+                      <span>{currentResult?.status === 'pending' && !isAwaitingExternal ? 'Run' : 'Re-run'} with different settings…</span>
                     </div>
                     <p className="text-[10.5px] leading-snug text-muted-foreground">
                       {linkedProvider === 'postman' ? 'Postman' : 'Datadog'} overrides for this
@@ -3006,9 +3018,16 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
 
       {/* ── Main 2-Zone Workspace ── */}
       <div className="flex-1 min-h-0 flex overflow-hidden relative">
-        {/* Left Rail */}
+        {/* Left Rail — overlay below xl, inline panel at xl+ */}
         {leftRailOpen && (
-          <aside className="w-64 border-r border-white/10 bg-card/40 flex flex-col shrink-0 absolute xl:static inset-y-0 left-0 z-40 shadow-2xl xl:shadow-none">
+          <div
+            className="absolute inset-0 z-30 bg-background/70 backdrop-blur-[2px] xl:hidden"
+            onClick={() => setLeftRailOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+        {leftRailOpen && (
+          <aside className="absolute inset-y-0 left-0 z-40 flex w-60 shrink-0 flex-col border-r border-white/10 bg-card/40 shadow-2xl xl:static xl:w-64 xl:shadow-none">
             <div className="p-3 border-b border-white/10 space-y-2">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-muted-foreground uppercase tracking-wider text-[11px]">
@@ -3719,7 +3738,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                         variant="outline"
                         size="sm"
                         onClick={handleRerunCase}
-                        disabled={run.status === 'aborted' || isExecutingExternalLocal || isAwaitingExternal}
+                        disabled={run.status === 'aborted' || isExecutingExternalLocal}
                         className="h-8 px-2.5 text-xs font-medium border-white/10 bg-white/5 hover:bg-white/10 hover:text-amber-400 hover:border-amber-500/30 text-muted-foreground cursor-pointer flex items-center gap-1.5 transition-colors"
                         title="Create a new attempt for this test case"
                       >
@@ -4489,7 +4508,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                           ? ` in request ${firstFailedRequest || 1} of ${requestCount}`
                           : ''
                       }`
-                    : 'Awaiting results';
+                    : (effectiveStatus === 'pending' && !isAwaitingExternal && !['RUNNING', 'QUEUED', 'WAITING'].includes(String(currentResult?.caseState || currentResult?.executionState || '').toUpperCase()) ? 'Not started' : 'Awaiting results');
                 return (
                   <div
                     className={cn(
@@ -4608,9 +4627,10 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                       <div className={cn(stepLayout === 'table' && "min-w-[640px]")}>
                         {/* Table Column Headers (Only in Table Mode) */}
                         {stepLayout === 'table' && (
-                          <div className="grid grid-cols-[56px_minmax(0,1.2fr)_minmax(0,1.2fr)_220px] items-center gap-4 px-4 py-2.5 bg-white/[0.04] border-b border-white/10 text-[11px] font-bold text-foreground/80 uppercase tracking-wider font-mono select-none">
+                          <div className="grid grid-cols-[56px_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.2fr)_220px] items-center gap-4 px-4 py-2.5 bg-white/[0.04] border-b border-white/10 text-[11px] font-bold text-foreground/80 uppercase tracking-wider font-mono select-none">
                             <div className="text-left pl-1">Step</div>
                             <div className="text-left">Action</div>
+                            <div className="text-left">Data</div>
                             <div className="text-left">Expected Result</div>
                             <div className="text-left">Status</div>
                           </div>
@@ -4630,9 +4650,18 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                         const formattedExpected = formatExpectedChecklistText(step.expected_result);
                         const cleanedData = cleanStepDataDisplay(step.data);
 
-                        const isStepCollapsed = stepLayout === 'stacked'
-                          ? (collapsedSteps[step.order] !== undefined ? collapsedSteps[step.order] : (isStepMarked || isCaseMarked))
-                          : Boolean(collapsedSteps[step.order]);
+                        const isStepCollapsed = (() => {
+                          if (sr?.status === 'fail' || sr?.status === 'error' || sr?.status === 'blocked' || sr?.status === 'invalid') {
+                            return false;
+                          }
+                          if (sr?.status === 'pass') {
+                            return true;
+                          }
+                          const manualDefault = stepLayout === 'stacked'
+                            ? (collapsedSteps[step.order] !== undefined ? collapsedSteps[step.order] : (isStepMarked || isCaseMarked))
+                            : Boolean(collapsedSteps[step.order]);
+                          return manualDefault;
+                        })();
 
                         return (
                           <div
@@ -4905,7 +4934,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                                            parameters={datasetParamsList}
                                          />
                                        ) : (
-                                         <span className="text-muted-foreground/40 italic font-normal">None specified</span>
+                                         <span className="text-muted-foreground/40 italic font-normal">—</span>
                                        )}
                                      </div>
                                    </div>
@@ -4913,7 +4942,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                                  </div>
                                ) : (
                                  /* ── Table View (Side-by-Side 2-Column) ── */
-                                 <div className="grid grid-cols-[56px_minmax(0,1.2fr)_minmax(0,1.2fr)_220px] items-start gap-4">
+                                 <div className="grid grid-cols-[56px_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.2fr)_220px] items-start gap-4">
                                    {/* Step Number with Click-to-Minimise & Passed check */}
                                    <div
                                      className="flex items-center gap-1.5 justify-start pl-1 pt-0.5 cursor-pointer select-none group/num"
@@ -4950,18 +4979,23 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                                          parameters={datasetParamsList}
                                        />
                                      </div>
-                                     {cleanedData && (
-                                       <div className="text-[11px] bg-white/[0.02] rounded p-1.5 text-foreground/85 font-mono overflow-x-auto border border-white/[0.06] mt-1">
-                                         <span className="font-semibold text-muted-foreground uppercase text-[10px] mr-1 font-sans">Input Data: </span>
+                                     {step.image_url && (
+                                       <img src={step.image_url} alt="" className="mt-1.5 rounded-lg max-h-24 object-contain border border-white/10 shadow-xs" />
+                                     )}
+                                   </div>
+
+                                   {/* Data */}
+                                   <div className="space-y-1 min-w-0 pr-2 text-left">
+                                     {cleanedData ? (
+                                       <div className="text-xs font-normal text-foreground/90 leading-relaxed whitespace-pre-wrap font-mono bg-white/[0.02] p-1.5 rounded border border-white/[0.06] overflow-x-auto">
                                          <LinkifiedText
                                            text={interpolateStepText(cleanedData, run?.resolved_variables, activeIterationRow)}
                                            variables={allVariablesList}
                                            parameters={datasetParamsList}
                                          />
                                        </div>
-                                     )}
-                                     {step.image_url && (
-                                       <img src={step.image_url} alt="" className="mt-1.5 rounded-lg max-h-24 object-contain border border-white/10 shadow-xs" />
+                                     ) : (
+                                       <span className="text-muted-foreground/40 italic font-normal text-xs">—</span>
                                      )}
                                    </div>
 
@@ -4975,7 +5009,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                                            parameters={datasetParamsList}
                                          />
                                        ) : (
-                                         <span className="text-muted-foreground/40 italic font-normal">None specified</span>
+                                         <span className="text-muted-foreground/40 italic font-normal">—</span>
                                        )}
                                      </div>
                                    </div>
@@ -5427,10 +5461,10 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                                 <button
                                   type="button"
                                   onClick={() => setOpenStepNotes((prev) => ({ ...prev, [step.order]: true }))}
-                                  className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 cursor-pointer transition-colors"
+                                  className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
+                                  title="Add step note"
                                 >
                                   <Plus className="h-3 w-3" />
-                                  <span>Add step note</span>
                                 </button>
                                   <div className="flex items-center gap-2 ml-auto">
                                     {firstDefect && sr?.status === 'fail' && (
@@ -5725,6 +5759,26 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                             </p>
                           )}
 
+
+                          {/* Overridden Variables */}
+                          {(() => {
+                            const sr = (r.stepResults || r.step_results || {}) as any;
+                            const ov = sr._overrideVariables;
+                            if (!ov || Object.keys(ov).length === 0) return null;
+                            return (
+                              <div className="pt-1.5 border-t border-white/5 space-y-1">
+                                <span className="text-[10px] font-mono text-muted-foreground">Variable Overrides:</span>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {Object.entries(ov).map(([k, v]) => (
+                                    <span key={k} className="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-[9.5px] font-mono text-amber-400">
+                                      {k}={String(v)}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
+
                           {/* Iteration Breakdown in History Attempt */}
                           {(() => {
                             const itList = ((r.iterationResults || r.iteration_results) as any[]) || [];
@@ -5820,6 +5874,26 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                               {h.failureReason}
                             </p>
                           )}
+
+                          {/* Overridden Variables */}
+                          {(() => {
+                            const sr = (h.stepResults || h.step_results || {}) as any;
+                            const ov = sr._overrideVariables;
+                            if (!ov || Object.keys(ov).length === 0) return null;
+                            return (
+                              <div className="pt-1.5 border-t border-white/5 space-y-1">
+                                <span className="text-[10px] font-mono text-muted-foreground">Variable Overrides:</span>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {Object.entries(ov).map(([k, v]) => (
+                                    <span key={k} className="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-[9.5px] font-mono text-amber-400">
+                                      {k}={String(v)}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
+
                           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
                             <span>Attempt #{h.attemptNumber}</span>
                             {h.executedAt && <span suppressHydrationWarning>{new Date(h.executedAt).toLocaleDateString()}</span>}
@@ -5851,7 +5925,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
             : undefined
         }
         initialEvidenceAttachments={defectStepContext.attachments}
-        failureNotes={notes || failureReason}
+        failureNotes={notes || failureReason || undefined}
         buildVersion={run?.buildVersion || run?.build_version}
         projectId={pj?.id || run?.project_id || slug || ''}
         modules={modules}
@@ -5859,7 +5933,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
         iterationIndex={datasetInfo ? activeIterationIdx + 1 : undefined}
         totalIterations={datasetInfo?.rows?.length}
         iterationParameters={activeIterationRow || undefined}
-        resolvedEnvironmentUrl={run?.environment ? environments.find((e: any) => e.name?.toUpperCase() === run.environment?.toUpperCase())?.base_url : undefined}
+        resolvedEnvironmentUrl={run?.environment ? (environments.find((e: any) => e.name?.toUpperCase() === run.environment?.toUpperCase())?.base_url || undefined) : undefined}
         onAppendStepNote={(targetOrder, extractedText) => {
           const cleanText = extractedText.trim();
           if (!cleanText) return;

@@ -1,5 +1,7 @@
 'use server';
 
+import { fetchConfluencePageContent, fetchNotionPageContent } from '@/lib/integrations/tool-clients';
+
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth.config';
 import { prisma } from '@/lib/db';
@@ -2399,7 +2401,10 @@ export async function executeTestCaseExternalRunnerAction(data: {
             status: 'PENDING',
             source: 'automated',
             notes: execResult.summary,
-            step_results: execResult.stepResults as any,
+            step_results: {
+              ...(execResult.stepResults as any || {}),
+              ...(data.customVariables && Object.keys(data.customVariables).length > 0 ? { _overrideVariables: data.customVariables } : {})
+            },
             automation_log: execResult.automationLog,
           },
         })
@@ -2432,7 +2437,10 @@ export async function executeTestCaseExternalRunnerAction(data: {
                   status: 'PENDING',
                   source: 'automated',
                   notes: execResult.summary,
-                  step_results: execResult.stepResults as any,
+                  step_results: {
+                    ...(execResult.stepResults as any || {}),
+                    ...(data.customVariables && Object.keys(data.customVariables).length > 0 ? { _overrideVariables: data.customVariables } : {})
+                  },
                   automation_log: execResult.automationLog,
                 },
               ],
@@ -3680,4 +3688,56 @@ export async function importExternalTestCasesAction(data: {
 
   revalidatePath('/p');
   return { created, skipped };
+}
+
+export async function fetchConfluencePageAction(projectId: string, pageUrl: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) throw new Error('Unauthorized');
+  const userId = (session.user as any).id as number;
+  const actualProjectId = await requireProjectMember(projectId, userId);
+
+  const project = await prisma.project.findUnique({
+    where: { id: actualProjectId },
+    select: { workspace_id: true }
+  });
+  if (!project) throw new Error('Project not found');
+
+  const integration = await prisma.integration.findUnique({
+    where: { workspace_id_provider: { workspace_id: project.workspace_id, provider: 'confluence' } }
+  });
+  if (!integration || !integration.enabled) throw new Error('Confluence integration not configured or enabled.');
+
+  const config = decryptToolConfig(integration.config as any);
+  try {
+    return await fetchConfluencePageContent(config as any, pageUrl);
+  } catch (err) {
+    logger.error('Confluence page import failed', {
+      module: 'Integrations',
+      action: 'fetchConfluencePageAction',
+      projectId: actualProjectId,
+      error: err,
+    });
+    throw err;
+  }
+}
+
+export async function fetchNotionPageAction(projectId: string, pageUrl: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) throw new Error('Unauthorized');
+  const userId = (session.user as any).id as number;
+  const actualProjectId = await requireProjectMember(projectId, userId);
+
+  const project = await prisma.project.findUnique({
+    where: { id: actualProjectId },
+    select: { workspace_id: true }
+  });
+  if (!project) throw new Error('Project not found');
+
+  const integration = await prisma.integration.findUnique({
+    where: { workspace_id_provider: { workspace_id: project.workspace_id, provider: 'notion' } }
+  });
+  if (!integration || !integration.enabled) throw new Error('Notion integration not configured or enabled.');
+
+  const config = decryptToolConfig(integration.config as any);
+  return fetchNotionPageContent(config as any, pageUrl);
 }

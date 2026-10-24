@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { generateTestRunId } from '@/lib/ids';
 import { apiErrorResponse } from '@/lib/apiHandler';
 import { ErrorCodes } from '@/lib/errors';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/v1/projects/:projectId/runs/postman
@@ -190,6 +191,13 @@ export async function POST(
       { status: 201 }
     );
   } catch (err: any) {
+    logger.error('Postman run ingestion failed', {
+      module: 'PostmanIngest',
+      action: 'ingestPostmanRun',
+      requestId,
+      errorCode: ErrorCodes.INTERNAL,
+      error: err,
+    });
     return apiErrorResponse(
       err?.message || 'Failed to ingest Postman run',
       500,

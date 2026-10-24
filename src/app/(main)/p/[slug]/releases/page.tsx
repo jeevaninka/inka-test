@@ -671,16 +671,16 @@ export default function ReleasesPage() {
 
       {/* Main Releases Table */}
       <div className="overflow-x-auto rounded-xl border border-border/50 bg-card/20 shadow-xs">
-        <table className="w-full table-fixed min-w-[920px] text-left text-xs">
+        <table className="w-full min-w-[520px] text-left text-xs">
           <thead className="bg-white/[0.015] border-b border-border/50 text-muted-foreground uppercase tracking-wider text-[11px]">
             <tr>
-              <th className="h-11 px-5 font-semibold w-[28%]">Release</th>
-              <th className="h-11 px-5 font-semibold w-[16%] whitespace-nowrap">Test Execution</th>
-              <th className="h-11 px-5 font-semibold w-[16%] whitespace-nowrap">Test Coverage</th>
-              <th className="h-11 px-5 font-semibold w-[14%] whitespace-nowrap">Due Date</th>
-              <th className="h-11 px-5 font-semibold w-[10%] text-center whitespace-nowrap">Author</th>
-              <th className="h-11 px-5 font-semibold w-[12%] whitespace-nowrap">Status</th>
-              <th className="h-11 px-5 font-semibold text-right w-[4%]"></th>
+              <th className="h-11 px-3 font-semibold">Release</th>
+              <th className="h-11 px-3 font-semibold w-[120px] whitespace-nowrap">Test Execution</th>
+              <th className="hidden lg:table-cell h-11 px-3 font-semibold w-[130px] whitespace-nowrap">Test Coverage</th>
+              <th className="hidden sm:table-cell h-11 px-3 font-semibold w-[120px] whitespace-nowrap">Due Date</th>
+              <th className="hidden xl:table-cell h-11 px-3 font-semibold w-[80px] text-center whitespace-nowrap">Author</th>
+              <th className="h-11 px-3 font-semibold w-[145px] whitespace-nowrap">Status</th>
+              <th className="h-11 pl-2 pr-3 font-semibold text-right w-[44px]"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/50 text-foreground">
@@ -733,7 +733,7 @@ export default function ReleasesPage() {
                       className="hover:bg-primary/[0.06] dark:hover:bg-white/[0.05] transition-colors cursor-pointer group"
                     >
                       {/* 1. Release Column: Name (teal on hover) + Source tag/link + Created Date/Time */}
-                      <td className="py-3.5 px-5">
+                      <td className="py-3.5 px-3">
                         <div className="flex flex-col min-w-0">
                           <div className="flex items-center gap-2 min-w-0">
                             <span
@@ -766,14 +766,14 @@ export default function ReleasesPage() {
                               </span>
                             )}
                           </div>
-                          <span className="text-[11px] text-muted-foreground mt-0.5">
+                          <span className="text-[11px] text-muted-foreground mt-0.5 truncate">
                             Created {format(new Date(rel.createdAt), 'MMM d, yyyy · h:mm a')}
                           </span>
                         </div>
                       </td>
 
                       {/* 2. Test Execution */}
-                      <td className="py-3.5 px-5 whitespace-nowrap">
+                      <td className="py-3.5 px-3 whitespace-nowrap">
                         {rel.metrics ? (
                           <Tooltip
                             side="top"
@@ -875,7 +875,7 @@ export default function ReleasesPage() {
                       </td>
 
                       {/* 3. Test Coverage: 1-line compact layout with rich Hover Card */}
-                      <td className="py-3.5 px-5 whitespace-nowrap">
+                      <td className="hidden lg:table-cell py-3.5 px-3 whitespace-nowrap">
                         {rel.coverage.totalTickets > 0 ? (
                           (() => {
                             const covPct = Math.round((rel.coverage.coveredTickets / rel.coverage.totalTickets) * 100);
@@ -944,14 +944,14 @@ export default function ReleasesPage() {
                       </td>
 
                       {/* 4. Due Date */}
-                      <td className="py-3.5 px-5 text-xs whitespace-nowrap">
-                        <span className={rel.isOverdue ? 'text-rose-500 font-bold' : rel.isDueToday ? 'text-amber-500 font-semibold' : 'text-muted-foreground'}>
+                      <td className="hidden sm:table-cell py-3.5 px-3 text-xs whitespace-nowrap">
+                        <span className={cn('block truncate', rel.isOverdue ? 'text-rose-500 font-bold' : rel.isDueToday ? 'text-amber-500 font-semibold' : 'text-muted-foreground')} title={rel.timelineText}>
                           {rel.timelineText}
                         </span>
                       </td>
 
                       {/* 5. Author (Avatar only + Name on hover) */}
-                      <td className="py-3.5 px-5 text-center whitespace-nowrap">
+                      <td className="hidden xl:table-cell py-3.5 px-3 text-center whitespace-nowrap">
                         <Tooltip content={authorName} side="top">
                           <div className="flex items-center justify-center">
                             <UserAvatar
@@ -969,44 +969,46 @@ export default function ReleasesPage() {
                       </td>
 
                       {/* 6. Status (Consolidated Status + Sign-off, last data column) */}
-                      <td className="py-3.5 px-5 whitespace-nowrap">
+                      <td className="py-3.5 px-3 whitespace-nowrap">
                         {rel.status === 'APPROVED' ? (
                           <Tooltip content={rel.blockerSummary} side="top">
-                            <span className="inline-flex items-center gap-2 text-xs font-medium text-emerald-400">
+                            <span className="inline-flex max-w-full items-center gap-2 text-xs font-medium text-emerald-400">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                              Approved
+                              <span className="truncate">Approved</span>
                             </span>
                           </Tooltip>
                         ) : rel.status === 'REJECTED' ? (
                           <Tooltip content={rel.blockerSummary} side="top">
-                            <span className="inline-flex items-center gap-2 text-xs font-medium text-rose-400">
+                            <span className="inline-flex max-w-full items-center gap-2 text-xs font-medium text-rose-400">
                               <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0" />
-                              Rejected
+                              <span className="truncate">Rejected</span>
                             </span>
                           </Tooltip>
                         ) : rel.status === 'IN_TESTING' ? (
                           rel.blockerSummary === 'Ready for sign-off' ? (
-                            <span className="inline-flex items-center gap-2 text-xs font-medium text-primary">
+                            <span className="inline-flex max-w-full items-center gap-2 text-xs font-medium text-primary">
                               <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
-                              Ready for Sign-off
+                              <span className="truncate">Ready for Sign-off</span>
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
+                            <span className="inline-flex max-w-full items-center gap-2 text-xs font-medium text-foreground">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                              In Testing
+                              <span className="truncate">In Testing</span>
                             </span>
                           )
                         ) : (
-                          <span className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                          <span className="inline-flex max-w-full items-center gap-2 text-xs font-medium text-muted-foreground">
                             <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 shrink-0" />
-                            Not Started
+                            <span className="truncate">Not Started</span>
                           </span>
                         )}
                       </td>
 
                       {/* 7. Expand Chevron */}
-                      <td className="py-3.5 px-5 text-right">
-                        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ml-auto ${isOpen ? 'rotate-180' : ''}`} />
+                      <td className="py-3.5 pl-2 pr-3 text-right">
+                        <span className="inline-flex h-5 w-5 items-center justify-center">
+                          <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                        </span>
                       </td>
                     </tr>
 

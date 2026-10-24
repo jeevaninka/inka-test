@@ -6,8 +6,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { ChevronDown, ChevronRight, Sparkles, CheckCircle2, Link2, Upload as UploadIcon, X, Tag, FileText, Folder, Loader2, Terminal, Copy, Plus, AlertCircle, Search, Eye, EyeOff } from 'lucide-react';
+import { ChevronDown, ChevronRight, Sparkles, CheckCircle2, Link2, Upload as UploadIcon, X, Tag, FileText, Folder, Loader2, Terminal, Copy, Plus, AlertCircle, Search, Eye, EyeOff, Image as ImageIcon } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { generateCasesAction, acceptMultipleAiCasesAction } from '@/app/actions/ai';
+import { fetchConfluencePageAction, fetchNotionPageAction } from '@/app/actions/integrations';
 import { createModuleAction } from '@/app/actions/modules';
 import { registerPostmanVariablesAction } from '@/app/actions/variables';
 import {
@@ -242,7 +244,7 @@ interface GenerateTestCasesDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string;
-  initialSourceMode?: 'prompt' | 'postman' | 'datadog';
+  initialSourceMode?: 'prompt' | 'postman' | 'datadog' | 'confluence' | 'notion';
   onSuccess?: (createdCases?: any[]) => void;
 }
 
@@ -254,7 +256,7 @@ export function GenerateTestCasesDialog({
   onSuccess,
 }: GenerateTestCasesDialogProps) {
   const { modules, setModules, cases: existingCases, setCases, project } = useProjectData();
-  const [sourceMode, setSourceMode] = useState<'prompt' | 'postman' | 'datadog'>(initialSourceMode);
+  const [sourceMode, setSourceMode] = useState<'prompt' | 'postman' | 'datadog' | 'confluence' | 'notion'>(initialSourceMode);
   const [description, setDescription] = useState('');
   const [countMode, setCountMode] = useState<'auto' | 'custom'>('auto');
   const [count, setCount] = useState<number>(5);
@@ -262,9 +264,15 @@ export function GenerateTestCasesDialog({
   const [creatingModule, setCreatingModule] = useState(false);
   const [promptMode, setPromptMode] = useState<'auto' | 'custom'>('auto');
   const [customPrompt, setCustomPrompt] = useState('');
+  const [showAdvancedPrompt, setShowAdvancedPrompt] = useState(false);
+  const [confluenceUrl, setConfluenceUrl] = useState('');
+  const [notionUrl, setNotionUrl] = useState('');
+  const [fetchingDoc, setFetchingDoc] = useState(false);
   const [files, setFiles] = useState<{name: string, mimeType: string, data: string}[]>([]);
   const [aiCustomTags, setAiCustomTags] = useState('');
   const [aiTicketKey, setAiTicketKey] = useState('');
+  const [activeContextSource, setActiveContextSource] = useState<'none' | 'upload' | 'screenshot' | 'confluence' | 'notion'>('none');
+  const [isDragging, setIsDragging] = useState(false);
   
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -407,6 +415,9 @@ export function GenerateTestCasesDialog({
   useEffect(() => {
     if (open) {
       setSourceMode(initialSourceMode);
+      setActiveContextSource(
+        initialSourceMode === 'confluence' || initialSourceMode === 'notion' ? initialSourceMode : 'none'
+      );
       setAiCustomTags(initialSourceMode === 'postman' ? 'Postman, API Testing' : '');
       loadReusableSteps();
     } else {
@@ -694,9 +705,12 @@ export function GenerateTestCasesDialog({
     setModuleId('auto');
     setPromptMode('auto');
     setCustomPrompt('');
+    setShowAdvancedPrompt(false);
     setFiles([]);
     setAiCustomTags('');
     setAiTicketKey('');
+    setActiveContextSource('none');
+    setIsDragging(false);
     setGeneratedCases([]);
     setSelectedIds(new Set());
     setExpandedIds(new Set());
@@ -1446,44 +1460,46 @@ export function GenerateTestCasesDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] !flex flex-col overflow-hidden">
-        <DialogHeader>
+      <DialogContent className="max-w-[680px] max-h-[90vh] !flex flex-col overflow-hidden p-0">
+        <DialogHeader className="px-5 pt-4 pb-3 border-b border-border/60">
           {sourceMode === 'postman' ? (
             <>
-              <DialogTitle className="flex items-center gap-2">
-                <PostmanLogo className="h-5 w-5 shrink-0" />
+              <DialogTitle className="flex items-center gap-2 text-base">
+                <PostmanLogo className="h-4 w-4 shrink-0" />
                 <span>Import from Postman Collection</span>
               </DialogTitle>
-              <DialogDescription>
+              <DialogDescription className="text-xs">
                 Select a Postman Collection &amp; Folder to import active API test cases with assertions and auto-linked runner configuration.
               </DialogDescription>
             </>
           ) : sourceMode === 'datadog' ? (
             <>
-              <DialogTitle className="flex items-center gap-2">
-                <DatadogLogo className="h-5 w-5 shrink-0" />
+              <DialogTitle className="flex items-center gap-2 text-base">
+                <DatadogLogo className="h-4 w-4 shrink-0" />
                 <span>Import from Datadog Synthetics</span>
               </DialogTitle>
-              <DialogDescription>
+              <DialogDescription className="text-xs">
                 Select Datadog Synthetic tests to import as real InkaTest test cases with per-step assertions and auto-linked runner configuration.
               </DialogDescription>
             </>
           ) : (
             <>
-              <DialogTitle className="flex items-center gap-2">
-                Generate Test Cases
-                <span className="inline-flex items-center gap-1 text-[11px] font-normal bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-400 border border-indigo-200/30 px-2 py-0.5 rounded-full">
-                  <Sparkles className="h-3 w-3" /> Powered by AI
-                </span>
-              </DialogTitle>
-              <DialogDescription>
-                Describe a feature and AI will generate structured, step-by-step test cases for it. It will also try to reuse existing steps.
+              <div className="flex items-center justify-between gap-2">
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  Generate Test Cases
+                  <span className="inline-flex items-center gap-1 text-[10px] font-normal bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-400 border border-indigo-200/30 px-1.5 py-0.5 rounded-full">
+                    <Sparkles className="h-2.5 w-2.5" /> AI
+                  </span>
+                </DialogTitle>
+              </div>
+              <DialogDescription className="text-xs">
+                Describe a feature and AI will generate structured, step-by-step test cases.
               </DialogDescription>
             </>
           )}
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto px-1 py-4 space-y-6 min-h-0 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 min-h-0 custom-scrollbar">
           {/* Form Section */}
           <div className="space-y-6">
             {sourceMode === 'postman' ? (
@@ -2438,163 +2454,324 @@ export function GenerateTestCasesDialog({
               </div>
             ) : (
               <>
-                <div className="space-y-3">
-                  <label className="text-sm font-semibold text-foreground">Describe the feature</label>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-foreground">Feature description</label>
                   <textarea
-                    className="w-full min-h-[140px] rounded-lg border border-input bg-transparent px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/70 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40 shadow-xs transition-colors"
+                    className={cn(
+                      'w-full min-h-[84px] max-h-[240px] rounded-lg border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/70 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40 shadow-xs transition-colors resize-y',
+                      isDragging ? 'border-dashed border-primary/60' : 'border-input'
+                    )}
                     placeholder="e.g. User should be able to reset their password via email link. Include validation for expired tokens and rate limiting."
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragging(true);
+                    }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDragging(false);
+                      const dropped = Array.from(e.dataTransfer?.files || []);
+                      if (dropped.length > 0) {
+                        setFiles((prev) => [
+                          ...prev,
+                          ...dropped.map((f) => ({
+                            name: f.name,
+                            mimeType: f.type || 'text/plain',
+                            data: '',
+                          })),
+                        ]);
+                      }
+                    }}
                     disabled={isGenerating || isSaving}
+                    rows={4}
                   />
                 </div>
                 
-                <div className="space-y-3">
-                  <label className="text-sm font-semibold text-foreground flex items-center justify-between">
-                    <span>Attach PRD documents or UI Screenshots (Optional)</span>
-                    <span className="text-xs text-muted-foreground font-normal">PDF, TXT, MD, CSV, PNG, JPG · Or paste with Cmd+V</span>
-                  </label>
-                  <div className="flex flex-col gap-3">
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <label className="cursor-pointer">
-                        <div className="flex items-center gap-2 px-3.5 py-2 border border-input rounded-xl hover:bg-muted/50 transition-colors text-xs font-medium">
-                          <UploadIcon className="h-4 w-4 text-muted-foreground" />
-                          <span>Upload Document or Screenshot</span>
-                        </div>
-                        <input
-                          type="file"
-                          className="hidden"
-                          accept=".pdf,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"
-                          multiple
-                          onChange={handleFileUpload}
-                          disabled={isGenerating || isSaving}
-                        />
-                      </label>
-                      <span className="text-xs text-muted-foreground">or press Cmd+V / Ctrl+V to paste screenshot</span>
-                    </div>
-                    {files.length > 0 && (
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        {files.map((file, idx) => {
-                          const isImage = file.mimeType.startsWith('image/');
-                          return (
-                            <div key={idx} className="relative flex items-center gap-2 p-1.5 pr-2.5 bg-muted/50 rounded-xl text-xs border border-border/60 group">
-                              {isImage ? (
-                                <img
-                                  src={`data:${file.mimeType};base64,${file.data}`}
-                                  alt={file.name}
-                                  className="h-10 w-10 object-cover rounded-lg border border-border/50 shrink-0"
-                                />
-                              ) : (
-                                <div className="h-10 w-10 rounded-lg bg-card border border-border/50 flex items-center justify-center shrink-0">
-                                  <FileText className="h-4 w-4 text-muted-foreground" />
-                                </div>
-                              )}
-                              <div className="min-w-0 max-w-[170px]">
-                                <div className="truncate font-medium text-foreground text-xs">{file.name}</div>
-                                <div className="text-[10px] text-muted-foreground uppercase">{isImage ? 'Screenshot' : file.mimeType.split('/')[1] || 'Doc'}</div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => removeFile(idx)}
-                                className="p-1 hover:bg-destructive/10 hover:text-destructive rounded-md transition-colors text-muted-foreground ml-1 cursor-pointer"
-                                title="Remove file"
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <label className="text-sm font-semibold text-foreground">Number of cases to generate</label>
-                  <div className="flex items-center gap-3">
-                    <Select
-                      value={countMode}
-                      onValueChange={(val) => setCountMode(val as 'auto' | 'custom')}
-                      disabled={isGenerating || isSaving}
-                      options={[
-                        { value: 'auto', label: 'Auto (Let AI decide)' },
-                        { value: 'custom', label: 'Custom limit' },
-                      ]}
-                    />
-                    {countMode === 'custom' && (
-                      <Input
-                        type="number"
-                        min={1}
-                        max={20}
-                        value={count}
-                        onChange={(e) => setCount(parseInt(e.target.value) || 5)}
-                        disabled={isGenerating || isSaving}
-                        className="w-24"
-                      />
-                    )}
-                  </div>
-                </div>
-
-                {/* AI Prompt Mode (Auto vs Custom Instructions) */}
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
-                    <label className="text-sm font-semibold text-foreground">AI prompt instructions</label>
-                    <div className="inline-flex items-center rounded-lg border border-border/70 bg-muted/30 p-0.5 text-xs">
-                      <button
+                    <label className="text-sm font-semibold text-foreground">Context</label>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs">
+                          <Plus className="h-3.5 w-3.5 mr-1" /> Add context
+                          <ChevronDown className="h-3.5 w-3.5 ml-1" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-56">
+                        <DropdownMenuItem onClick={() => { setActiveContextSource('upload'); document.getElementById('context-file-upload2')?.click(); }}>
+                          <UploadIcon className="h-4 w-4 mr-2" />
+                          Upload PRD or document
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setActiveContextSource('screenshot'); }}>
+                          <ImageIcon className="h-4 w-4 mr-2" />
+                          Attach screenshot / paste image
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setActiveContextSource('confluence'); setSourceMode('confluence'); }}>
+                          <FileText className="h-4 w-4 mr-2 text-blue-500" />
+                          Import from Confluence
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setActiveContextSource('notion'); setSourceMode('notion'); }}>
+                          <FileText className="h-4 w-4 mr-2" />
+                          Import from Notion
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">PDF, TXT, MD, CSV, PNG, JPG · or paste</p>
+                  <input
+                    id="context-file-upload2"
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"
+                    multiple
+                    onChange={handleFileUpload}
+                    disabled={isGenerating || isSaving}
+                  />
+                  {files.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {files.map((file, idx) => {
+                        const isImage = file.mimeType.startsWith('image/');
+                        return (
+                          <div key={idx} className="inline-flex items-center gap-1.5 pl-1.5 pr-1.5 py-1 bg-muted/50 rounded-md text-xs border border-border/60">
+                            {isImage ? (
+                              <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                            ) : (
+                              <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                            )}
+                            <span className="max-w-[140px] truncate">{file.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeFile(idx)}
+                              className="p-0.5 hover:bg-destructive/10 hover:text-destructive rounded"
+                              title="Remove"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {activeContextSource === 'confluence' && (
+                    <div className="flex gap-2 items-center">
+                      <FileText className="h-4 w-4 text-blue-500 shrink-0" />
+                      <Input
+                        placeholder="Confluence Page URL or ID..."
+                        value={confluenceUrl}
+                        onChange={(e) => setConfluenceUrl(e.target.value)}
+                        disabled={isGenerating || isSaving || fetchingDoc}
+                        className="flex-1 text-xs h-8"
+                      />
+                      <Button
                         type="button"
-                        disabled={isGenerating || isSaving}
-                        onClick={() => setPromptMode('auto')}
-                        className={cn(
-                          'px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer',
-                          promptMode === 'auto'
-                            ? 'bg-background text-foreground shadow-2xs'
-                            : 'text-muted-foreground hover:text-foreground'
-                        )}
+                        variant="secondary"
+                        size="sm"
+                        disabled={!confluenceUrl.trim() || fetchingDoc}
+                        onClick={async () => {
+                          setFetchingDoc(true);
+                          try {
+                            const doc = await fetchConfluencePageAction(projectId, confluenceUrl.trim());
+                            const contentText = doc.markdown;
+                            setDescription(prev => prev ? prev + '\n\n' + contentText : contentText);
+                            toast.success('Successfully imported Confluence PRD content!');
+                            setConfluenceUrl('');
+                            setActiveContextSource('none');
+                          } catch (err: any) {
+                            toast.error(err.message || 'Failed to fetch Confluence page');
+                          } finally {
+                            setFetchingDoc(false);
+                          }
+                        }}
+                        className="text-xs h-8"
                       >
-                        Auto (Default)
-                      </button>
-                      <button
+                        {fetchingDoc ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Import'}
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setActiveContextSource('none')}>
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )}
+                  {activeContextSource === 'notion' && (
+                    <div className="flex gap-2 items-center">
+                      <FileText className="h-4 w-4 shrink-0" />
+                      <Input
+                        placeholder="Notion Page URL or ID..."
+                        value={notionUrl}
+                        onChange={(e) => setNotionUrl(e.target.value)}
+                        disabled={isGenerating || isSaving || fetchingDoc}
+                        className="flex-1 text-xs h-8"
+                      />
+                      <Button
                         type="button"
-                        disabled={isGenerating || isSaving}
-                        onClick={() => setPromptMode('custom')}
-                        className={cn(
-                          'px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1',
-                          promptMode === 'custom'
-                            ? 'bg-primary/15 text-primary border border-primary/30 shadow-2xs'
-                            : 'text-muted-foreground hover:text-foreground'
-                        )}
+                        variant="secondary"
+                        size="sm"
+                        disabled={!notionUrl.trim() || fetchingDoc}
+                        onClick={async () => {
+                          setFetchingDoc(true);
+                          try {
+                            const doc = await fetchNotionPageAction(projectId, notionUrl.trim());
+                            const contentText = doc.markdown;
+                            setDescription(prev => prev ? prev + '\n\n' + contentText : contentText);
+                            toast.success('Successfully imported Notion PRD content!');
+                            setNotionUrl('');
+                            setActiveContextSource('none');
+                          } catch (err: any) {
+                            toast.error(err.message || 'Failed to fetch Notion page');
+                          } finally {
+                            setFetchingDoc(false);
+                          }
+                        }}
+                        className="text-xs h-8"
                       >
-                        <Sparkles className="h-3 w-3" />
-                        <span>Custom Prompt</span>
-                      </button>
+                        {fetchingDoc ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Import'}
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setActiveContextSource('none')}>
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                
+
+                {/* Generation settings */}
+                <div className="space-y-2 pt-1">
+                  <label className="text-sm font-semibold text-foreground">Generation settings</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">Number of cases</label>
+                      <div className="flex items-center gap-2">
+                        <Select
+                          value={countMode}
+                          onValueChange={(val) => setCountMode(val as 'auto' | 'custom')}
+                          disabled={isGenerating || isSaving}
+                          options={[
+                            { value: 'auto', label: 'Auto' },
+                            { value: 'custom', label: 'Custom' },
+                          ]}
+                          className="flex-1 h-8 text-xs"
+                        />
+                        {countMode === 'custom' && (
+                          <Input
+                            type="number"
+                            min={1}
+                            max={20}
+                            value={count}
+                            onChange={(e) => setCount(parseInt(e.target.value) || 5)}
+                            disabled={isGenerating || isSaving}
+                            className="w-16 h-8 text-xs"
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                        <Folder className="h-3 w-3" />
+                        Module
+                      </label>
+                      <ModuleSelect
+                        modules={modules}
+                        value={moduleId}
+                        allowAutoDetect
+                        noneLabel="Auto"
+                        disabled={isSaving}
+                        onInlineCreate={handleCreateModuleInline}
+                        onChange={(val) => {
+                          setModuleId(val);
+                          setGeneratedCases((prev) =>
+                            prev.map((c) => ({
+                              ...c,
+                              moduleId: val === 'auto' ? c.moduleId : val || null,
+                            }))
+                          );
+                        }}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                        <Tag className="h-3 w-3" />
+                        Tags
+                      </label>
+                      <Input
+                        placeholder="e.g. regression, auth"
+                        value={aiCustomTags}
+                        onChange={(e) => setAiCustomTags(e.target.value)}
+                        className="h-8 text-xs"
+                        disabled={isGenerating || isSaving}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                        <Tag className="h-3 w-3" />
+                        InkaBoard/Jira ticket
+                      </label>
+                      <Input
+                        placeholder="INK-101"
+                        value={aiTicketKey}
+                        onChange={(e) => setAiTicketKey(e.target.value)}
+                        className="h-8 text-xs font-mono"
+                        disabled={isGenerating || isSaving}
+                      />
                     </div>
                   </div>
+                </div>
 
-                  {promptMode === 'custom' && (
-                    <div className="p-3 rounded-xl border border-primary/30 bg-primary/5 space-y-2">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        {[
-                          'Focus only on negative & boundary cases',
-                          'Use {parameter} placeholders for data-driven runs',
-                          'Generate P0/P1 critical happy-path flows only',
-                          'Include role/permission validation checks',
-                        ].map((preset) => (
-                          <button
-                            key={preset}
-                            type="button"
-                            disabled={isGenerating || isSaving}
-                            onClick={() => setCustomPrompt(preset)}
-                            className="text-[11px] px-2 py-0.5 rounded-full border border-primary/25 bg-background/80 hover:bg-primary/10 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                          >
-                            {preset}
-                          </button>
-                        ))}
-                      </div>
+                {/* Advanced prompt settings */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-sm font-semibold text-foreground">Advanced</label>
+                    <button
+                      type="button"
+                      disabled={isGenerating || isSaving}
+                      onClick={() => setShowAdvancedPrompt((v) => !v)}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <span>Prompt mode</span>
+                      <span className="inline-flex items-center rounded-md border border-border/70 bg-muted/30 p-0.5 text-[11px]">
+                        <button
+                          type="button"
+                          disabled={isGenerating || isSaving}
+                          onClick={() => setPromptMode('auto')}
+                          className={cn(
+                            'px-1.5 py-0.5 rounded font-medium transition-colors cursor-pointer',
+                            promptMode === 'auto'
+                              ? 'bg-background text-foreground shadow-2xs'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          Auto
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isGenerating || isSaving}
+                          onClick={() => setPromptMode('custom')}
+                          className={cn(
+                            'px-1.5 py-0.5 rounded font-medium transition-colors cursor-pointer',
+                            promptMode === 'custom'
+                              ? 'bg-primary/15 text-primary'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          Custom
+                        </button>
+                      </span>
+                      {showAdvancedPrompt ? (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
+
+                  {showAdvancedPrompt && promptMode === 'custom' && (
+                    <div className="space-y-1.5">
                       <Input
                         value={customPrompt}
                         onChange={(e) => setCustomPrompt(e.target.value)}
-                        placeholder="Tell AI how to generate these cases (e.g. Focus on GST calculation edge cases and invalid age boundaries)..."
-                        className="h-9 text-xs bg-background"
+                        placeholder="Custom instructions for test case generation..."
+                        className="h-8 text-xs bg-background"
                         disabled={isGenerating || isSaving}
                       />
                     </div>
@@ -2603,108 +2780,42 @@ export function GenerateTestCasesDialog({
               </>
             )}
 
-            {/* Module, Tags and Ticket Key */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
-                  <Folder className="h-3.5 w-3.5" />
-                  <span>Module</span>
-                </label>
-                <ModuleSelect
-                  modules={modules}
-                  value={moduleId}
-                  allowAutoDetect
-                  noneLabel="No module (Root)"
-                  disabled={isSaving}
-                  onInlineCreate={handleCreateModuleInline}
-                  onChange={(val) => {
-                    setModuleId(val);
-                    setGeneratedCases((prev) =>
-                      prev.map((c) => ({
-                        ...c,
-                        moduleId: val === 'auto' ? c.moduleId : val || null,
-                      }))
-                    );
-                  }}
+            
+
+            {sourceMode === 'prompt' && isGenerating && (
+              <div className="relative w-full h-9 rounded-lg border border-primary/40 bg-[#121620] overflow-hidden shadow-sm flex items-center justify-between px-3 select-none animate-in fade-in-0">
+                <div
+                  className="absolute inset-y-0 left-0 bg-gradient-to-r from-primary/25 via-cyan-500/20 to-primary/30 transition-all duration-300 ease-out"
+                  style={{ width: `${progress}%` }}
                 />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
-                  <Tag className="h-3.5 w-3.5" />
-                  <span>Attach Tags (comma-separated)</span>
-                </label>
-                <Input
-                  placeholder={
-                    sourceMode === 'datadog'
-                      ? 'Datadog, regression'
-                      : 'e.g. Postman, API Testing, sprint-24'
-                  }
-                  value={aiCustomTags}
-                  onChange={(e) => setAiCustomTags(e.target.value)}
-                  className="h-9 text-xs"
-                  disabled={isGenerating || isSaving}
+                <div
+                  className="absolute bottom-0 left-0 h-0.5 bg-gradient-to-r from-primary to-cyan-400 transition-all duration-300 ease-out shadow-glow-sm"
+                  style={{ width: `${progress}%` }}
                 />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
-                  <Tag className="h-3.5 w-3.5" />
-                  <span>
-                    Link to InkaBoard / Jira Ticket{' '}
-                    <span className="font-normal text-muted-foreground/80">(optional)</span>
+                <div className="relative z-10 flex items-center gap-2 min-w-0 flex-1 mr-2">
+                  <Sparkles className="h-3.5 w-3.5 animate-spin text-cyan-400 shrink-0" />
+                  <span className="text-xs font-medium text-foreground truncate">
+                    {generationStage || 'Analyzing and Generating...'}
                   </span>
-                </label>
-                <Input
-                  placeholder="e.g. INK-101 or JIRA-42"
-                  value={aiTicketKey}
-                  onChange={(e) => setAiTicketKey(e.target.value)}
-                  className="h-9 text-xs font-mono"
-                  disabled={isGenerating || isSaving}
-                />
-              </div>
-            </div>
-            {sourceMode === 'prompt' && (
-              isGenerating ? (
-                <div className="relative w-full h-11 rounded-xl border border-primary/40 bg-[#121620] overflow-hidden shadow-sm flex items-center justify-between px-4 select-none animate-in fade-in-0">
-                  <div
-                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-primary/25 via-cyan-500/20 to-primary/30 transition-all duration-300 ease-out"
-                    style={{ width: `${progress}%` }}
-                  />
-                  <div
-                    className="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-primary to-cyan-400 transition-all duration-300 ease-out shadow-glow-sm"
-                    style={{ width: `${progress}%` }}
-                  />
-                  <div className="relative z-10 flex items-center gap-2.5 min-w-0 flex-1 mr-3">
-                    <Sparkles className="h-4 w-4 animate-spin text-cyan-400 shrink-0" />
-                    <span className="text-xs font-medium text-foreground truncate">
-                      {generationStage || 'Analyzing and Generating...'}
-                    </span>
-                  </div>
-                  <div className="relative z-10 font-mono text-xs font-bold text-cyan-400 shrink-0">
-                    {Math.round(progress)}%
-                  </div>
                 </div>
-              ) : (
-                <Button 
-                  className="w-full h-11 text-base shadow-sm font-semibold cursor-pointer" 
-                  onClick={handleGenerate} 
-                  disabled={isSaving || (!description.trim() && files.length === 0)}
-                >
-                  <Sparkles className="h-5 w-5 mr-2" />
-                  <span>Generate with AI</span>
-                </Button>
-              )
+                <div className="relative z-10 font-mono text-xs font-bold text-cyan-400 shrink-0">
+                  {Math.round(progress)}%
+                </div>
+              </div>
             )}
           </div>
 
           {/* Results Section */}
           {generatedCases.length > 0 && sourceMode !== 'datadog' && (
-            <div className="space-y-4 pt-4 border-t border-border/50">
-              <div className="flex items-center justify-between px-1">
-                <h3 className="font-medium text-sm flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-primary" />
-                  Generated {generatedCases.length} cases
-                </h3>
-                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+            <div className="space-y-3 pt-3 border-t border-border/50">
+              <div className="flex items-center justify-between px-0.5">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-medium text-sm flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-primary" />
+                    {generatedCases.length} test case{generatedCases.length === 1 ? '' : 's'} generated
+                  </h3>
+                </div>
+                <label className="flex items-center gap-2 text-xs font-medium cursor-pointer">
                   <input
                     type="checkbox"
                     checked={selectedIds.size === generatedCases.length}
@@ -2994,32 +3105,66 @@ export function GenerateTestCasesDialog({
         </div>
 
         {sourceMode === 'postman' && (
-          <div className="px-1 pt-2 text-[11px] font-medium text-muted-foreground">
+          <div className="px-5 pt-1 text-[11px] font-medium text-muted-foreground">
             {postmanSummaryText}
           </div>
         )}
 
-        <DialogFooter className="mt-2">
+        <DialogFooter className="mt-0 px-5 py-3 border-t border-border/60">
           {sourceMode === 'datadog' && selectedDatadogTestIds.size === 0 && (
             <span className="sm:mr-auto text-[11px] font-medium text-muted-foreground">
               Select tests to import
             </span>
           )}
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isGenerating || isSaving}>
-            Cancel
-          </Button>
-          <Button 
-            onClick={handleSave} 
-            disabled={
-              selectedIds.size === 0 ||
-              isGenerating ||
-              isSaving ||
-              (sourceMode === 'datadog' && loadingSelectedDatadogSteps)
-            }
-            className="gradient-btn text-white"
-          >
-            {isSaving ? 'Saving...' : `Add to Repository (${selectedIds.size})`}
-          </Button>
+          {sourceMode === 'prompt' && generatedCases.length === 0 && !isGenerating && (
+            <>
+              <span className="sm:mr-auto text-[11px] text-muted-foreground">
+                Cases are saved as Draft for review
+              </span>
+              <Button
+                onClick={handleGenerate}
+                disabled={isSaving || (!description.trim() && files.length === 0)}
+                className="gradient-btn text-white"
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                <span>Generate with AI</span>
+              </Button>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
+                Cancel
+              </Button>
+            </>
+          )}
+          {sourceMode === 'prompt' && generatedCases.length > 0 && !isGenerating && (
+            <>
+              <span className="sm:mr-auto text-[11px] font-medium text-muted-foreground">
+                {selectedIds.size} of {generatedCases.length} selected
+              </span>
+              <Button
+                onClick={handleSave}
+                disabled={selectedIds.size === 0 || isSaving}
+                className="gradient-btn text-white"
+              >
+                {isSaving ? 'Saving...' : `Add to Repository (${selectedIds.size})`}
+              </Button>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
+                Cancel
+              </Button>
+            </>
+          )}
+          {(sourceMode === 'postman' || sourceMode === 'datadog') && (
+            <Button
+              onClick={handleSave}
+              disabled={
+                selectedIds.size === 0 ||
+                isGenerating ||
+                isSaving ||
+                (sourceMode === 'datadog' && loadingSelectedDatadogSteps)
+              }
+              className="gradient-btn text-white"
+            >
+              {isSaving ? 'Saving...' : `Add to Repository (${selectedIds.size})`}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

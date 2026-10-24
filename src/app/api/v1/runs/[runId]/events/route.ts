@@ -1,10 +1,14 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth.config';
 import { prisma } from '@/lib/db';
 import { requireProjectMemberByRunId } from '@/lib/permissions';
 import { subscribeRunEvents } from '@/lib/execution/events';
 import { computeQueuePositions, deriveRunLifecycle, latestAttempts } from '@/lib/execution/state';
+import { logger } from '@/lib/logger';
+import { ErrorCodes, normalizeError } from '@/lib/errors';
+import { apiErrorResponse } from '@/lib/apiHandler';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,17 +25,45 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ runId: string }> }
 ) {
+  const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
+  const start = performance.now();
+
   const session = await getServerSession(authOptions);
   if (!session?.user) {
-    return new Response('Unauthorized', { status: 401 });
+    logger.warn('[SSE] Unauthorized access attempt: GET /api/v1/runs/:runId/events', {
+      module: 'RunEventsSSE',
+      action: 'authCheck',
+      requestId,
+      method: 'GET',
+      pathname: '/api/v1/runs/:runId/events',
+      status: 401,
+    });
+    return apiErrorResponse('Unauthorized: authentication required', 401, ErrorCodes.UNAUTHORIZED, requestId);
   }
   const { runId } = await context.params;
   const userId = (session.user as any).id as number;
 
+  logger.debug('[SSE] --> GET /api/v1/runs/:runId/events', {
+    module: 'RunEventsSSE',
+    action: 'requestStart',
+    requestId,
+    userId: String(userId),
+    runId,
+    method: 'GET',
+  });
+
   try {
     await requireProjectMemberByRunId(runId, userId, 'VIEWER');
   } catch {
-    return new Response('Forbidden', { status: 403 });
+    logger.warn('[SSE] Forbidden access attempt: GET /api/v1/runs/:runId/events', {
+      module: 'RunEventsSSE',
+      action: 'permissionCheck',
+      requestId,
+      userId: String(userId),
+      runId,
+      status: 403,
+    });
+    return apiErrorResponse('Forbidden: access denied to run', 403, ErrorCodes.FORBIDDEN, requestId);
   }
 
   const encoder = new TextEncoder();
@@ -152,10 +184,27 @@ export async function GET(
         } catch {
           // already closed
         }
+        const durationMs = Math.round(performance.now() - start);
+        logger.info('[SSE] Stream closed', {
+          module: 'RunEventsSSE',
+          action: 'streamClose',
+          requestId,
+          userId: String(userId),
+          runId,
+          durationMs,
+        });
       };
 
       request.signal.addEventListener('abort', cleanup);
     },
+  });
+
+  logger.info('[SSE] Stream opened', {
+    module: 'RunEventsSSE',
+    action: 'streamOpen',
+    requestId,
+    userId: String(userId),
+    runId,
   });
 
   return new Response(stream, {
@@ -164,6 +213,7 @@ export async function GET(
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
+      'x-request-id': requestId,
     },
   });
 }

@@ -392,6 +392,26 @@ export const authOptions: NextAuthOptions = {
     signIn: '/login',
     error: '/login',
   },
+  events: {
+    async signIn({ user, account, profile, isNewUser }: any) {
+      logger.info('User signed in', {
+        module: 'Auth',
+        action: 'signIn',
+        userId: user.id,
+        email: user.email,
+        provider: account?.provider,
+        isNewUser,
+      });
+    },
+    async signOut({ token }: any) {
+      logger.info('User signed out', {
+        module: 'Auth',
+        action: 'signOut',
+        userId: token?.userId,
+        email: token?.email,
+      });
+    },
+  },
 };
 
 export const getCachedServerSession = cache(() => getServerSession(authOptions));

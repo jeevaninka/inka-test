@@ -8,7 +8,7 @@
 
 export type RunCaseTypeFilter = 'all' | 'manual' | 'automated';
 
-export type RunGroupBy = 'flat' | 'module' | 'suite' | 'status' | 'priority';
+export type RunGroupBy = 'flat' | 'module' | 'suite' | 'status' | 'priority' | 'assignee';
 
 export interface RunViewFilters {
   /** Manual / automated / all cases. */
@@ -37,6 +37,7 @@ export const RUN_GROUP_OPTIONS: { value: RunGroupBy; label: string }[] = [
   { value: 'suite', label: 'Suite' },
   { value: 'priority', label: 'Priority' },
   { value: 'status', label: 'Status' },
+  { value: 'assignee', label: 'Assignee' },
 ];
 
 export const RUN_PRIORITY_OPTIONS = [
@@ -66,7 +67,7 @@ function storageKey(runId: string): string {
 }
 
 const CASE_TYPES: RunCaseTypeFilter[] = ['all', 'manual', 'automated'];
-const GROUP_BY: RunGroupBy[] = ['flat', 'module', 'suite', 'status', 'priority'];
+const GROUP_BY: RunGroupBy[] = ['flat', 'module', 'suite', 'status', 'priority', 'assignee'];
 
 /** Read a persisted multi-select, falling back to the legacy single value. */
 function readSelection(value: unknown, legacy: unknown): string[] {

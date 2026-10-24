@@ -36,7 +36,7 @@ const tabs = [
     : tabs.find(t => pathname.includes(`/settings/${t.tab}`))?.tab || 'general';
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-5xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-5 max-w-[880px]">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
         <p className="text-xs text-muted-foreground mt-0.5">
@@ -47,7 +47,7 @@ const tabs = [
       </div>
 
       <div className="border-b border-border/50">
-        <nav className="flex gap-6 overflow-x-auto scrollbar-none">
+        <nav className="flex gap-6 overflow-x-auto scrollbar-none sticky top-0 bg-popover z-10">
           {tabs.map((tab) => (
             <button
               key={tab.tab}

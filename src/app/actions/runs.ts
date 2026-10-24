@@ -315,7 +315,11 @@ export async function getTestRunByIdAction(runId: string) {
 
   const r = await prisma.testRun.findUnique({
     where: { id: runId },
-    include: { suite: { select: { name: true } }, results: true },
+    include: {
+      suite: { select: { name: true } },
+      release: { select: { due_date: true } },
+      results: true,
+    },
   });
   if (!r) return null;
 
@@ -333,6 +337,7 @@ export async function getTestRunByIdAction(runId: string) {
     source: r.source || 'manual',
     startedAt: r.started_at?.toISOString(),
     completedAt: r.completed_at?.toISOString(),
+    dueDate: r.release?.due_date?.toISOString() ?? null,
     createdBy: r.created_by,
     createdAt: r.created_at.toISOString(),
     resolved_variables: r.resolved_variables,
@@ -1149,22 +1154,6 @@ export async function assignRunResultAction(resultId: string, userId: number) {
     data: { assigned_to: userId },
   });
 
-  // Dispatch multi-channel notifications (In-App, Slack Channel, Slack DM, Email)
-  NotificationService.notifyCaseAssigned({
-    runResultId: resultId,
-    targetUserId: userId,
-    assignerId: uid,
-  }).catch((err) =>
-    logger.error('Failed to notify case assignment', {
-      module: 'Runs',
-      action: 'assignRunResultAction',
-      runResultId: resultId,
-      targetUserId: userId,
-      errorCode: ErrorCodes.INTERNAL,
-      error: err,
-    })
-  );
-
   return true;
 }
 
@@ -1969,3 +1958,14 @@ export async function restoreTestRunAction(id: string) {
 }
 
 
+
+
+export async function getProjectRunsAction(projectId: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) throw new Error('Unauthorized');
+
+  const { getTestRuns } = await import('@/lib/dal/projects');
+  const { mapPrismaRunToMock } = await import('@/lib/dal/mappers');
+  const prismaRuns = await getTestRuns(projectId);
+  return prismaRuns.map(mapPrismaRunToMock);
+}

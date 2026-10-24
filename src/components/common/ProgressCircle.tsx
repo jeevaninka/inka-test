@@ -8,6 +8,7 @@ export interface ProgressSegments {
   fail?: number;
   blocked?: number;
   invalid?: number;
+  error?: number;
   /** Provider result never arrived before the monitoring-expiry policy. */
   unavailable?: number;
   skip?: number;
@@ -48,7 +49,7 @@ export function ProgressCircle({
   ...props
 }: ProgressCircleProps) {
   const segCompleted = segments
-    ? (segments.pass || 0) + (segments.fail || 0) + (segments.blocked || 0) + (segments.invalid || 0) + (segments.unavailable || 0) + (segments.skip || 0)
+    ? (segments.pass || 0) + (segments.fail || 0) + (segments.blocked || 0) + (segments.invalid || 0) + (segments.error || 0) + (segments.unavailable || 0) + (segments.skip || 0)
     : 0;
   const effectiveValue = segments
     ? (segments.total && segments.total > 0 ? Math.round((segCompleted / segments.total) * 100) : 0)
@@ -88,6 +89,7 @@ export function ProgressCircle({
       if (segments.fail && segments.fail > 0) activeCategories.push({ color: '#f43f5e', count: segments.fail });
       if (segments.blocked && segments.blocked > 0) activeCategories.push({ color: '#f59e0b', count: segments.blocked });
       if (segments.invalid && segments.invalid > 0) activeCategories.push({ color: '#8b5cf6', count: segments.invalid });
+      if (segments.error && segments.error > 0) activeCategories.push({ color: '#a78bfa', count: segments.error });
       if (segments.unavailable && segments.unavailable > 0) activeCategories.push({ color: '#f97316', count: segments.unavailable });
       if (segments.skip && segments.skip > 0) activeCategories.push({ color: '#94a3b8', count: segments.skip });
 
@@ -213,6 +215,7 @@ export function ProgressCircle({
             if (segments.fail && segments.fail > 0) activeCategories.push({ color: '#f43f5e', count: segments.fail });
             if (segments.blocked && segments.blocked > 0) activeCategories.push({ color: '#f59e0b', count: segments.blocked });
             if (segments.invalid && segments.invalid > 0) activeCategories.push({ color: '#8b5cf6', count: segments.invalid });
+            if (segments.error && segments.error > 0) activeCategories.push({ color: '#a78bfa', count: segments.error });
             if (segments.unavailable && segments.unavailable > 0) activeCategories.push({ color: '#f97316', count: segments.unavailable });
             if (segments.skip && segments.skip > 0) activeCategories.push({ color: '#94a3b8', count: segments.skip });
 

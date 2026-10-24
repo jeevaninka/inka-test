@@ -361,6 +361,7 @@ export function CreateRunModal({
   // Case selection & tab state
   const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(new Set());
   const [caseSearch, setCaseSearch] = useState('');
+  const [suiteSearch, setSuiteSearch] = useState('');
   const [expandedSuites, setExpandedSuites] = useState<Set<string>>(new Set());
   const [caseTab, setCaseTab] = useState<string>('suites');
   const [pickerMode, setPickerMode] = useState<'' | 'manual' | 'auto'>('');
@@ -793,11 +794,19 @@ export function CreateRunModal({
   const isFilterActive = Boolean(caseSearch);
 
   const displayedSuites = useMemo(() => {
-    if (isFilterActive) {
-      return suitesWithCases.filter((s: any) => s.cases.length > 0);
-    }
-    return suitesWithCases;
-  }, [suitesWithCases, isFilterActive]);
+    const suiteQuery = suiteSearch.trim().toLowerCase();
+    const filtered = suiteQuery
+      ? suitesWithCases.filter(
+          (s: any) =>
+            String(s.name || '').toLowerCase().includes(suiteQuery) ||
+            (s.cases || []).some((c: any) =>
+              String(c.title || '').toLowerCase().includes(suiteQuery) ||
+              String(c.displayId || '').toLowerCase().includes(suiteQuery)
+            )
+        )
+      : suitesWithCases;
+    return filtered;
+  }, [suitesWithCases, suiteSearch]);
 
   const allSuitesSelected = useMemo(() => {
     if (displayedSuites.length === 0) return false;
@@ -1246,38 +1255,6 @@ export function CreateRunModal({
 
           {/* Modal Body */}
           <div className="p-4 sm:p-5 space-y-3 min-w-0 w-full flex-1 min-h-0 overflow-y-auto">
-            {/* Selection summary — appears as soon as any case is selected. The
-                run mode is derived from the selection and shown read-only. */}
-            {runType === 'manual' && selectedCaseIds.size > 0 && (
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/[0.06] px-3 py-2 min-w-0">
-                <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-primary text-primary-foreground shrink-0">
-                    <ListChecks className="h-3 w-3" />
-                  </span>
-                  <span className="text-xs font-semibold text-foreground tabular-nums">
-                    {selectedInViewCount === selectedCaseIds.size
-                      ? `${selectedCaseIds.size} selected`
-                      : `${selectedInViewCount} of ${selectedCaseIds.size} selected`}
-                  </span>
-                  {runModeLabel && (
-                    <>
-                      <span className="text-muted-foreground/40">·</span>
-                      <span className="text-[11px] text-muted-foreground">Run mode</span>
-                      <span className="inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-primary">
-                        {runModeLabel}
-                      </span>
-                    </>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedCaseIds(new Set())}
-                  className="text-[11px] font-medium text-muted-foreground hover:text-foreground cursor-pointer shrink-0"
-                >
-                  Clear selection
-                </button>
-              </div>
-            )}
             {/* Row 1: Run Name — Postman/Datadog runs put Environment beside it (75/25). */}
             <div
               className={cn(
@@ -1784,7 +1761,7 @@ export function CreateRunModal({
               </div>
 
               <div className="min-w-0">
-                <label className="block text-xs font-semibold text-foreground/90 mb-1.5">Assign All To</label>
+                <label className="block text-xs font-semibold text-foreground/90 mb-1.5">Assignee</label>
                 <Select
                   value={bulkAssignee ? String(bulkAssignee) : ''}
                   onValueChange={(val) => {
@@ -1813,7 +1790,7 @@ export function CreateRunModal({
             {/* Run-level automated settings. Collapsed by default: the run
                 environment is the default for every linked case, and overrides
                 are only needed for exceptional runs. */}
-            {runType === 'manual' && formData.mode !== 'manual' && (
+            {runType === 'manual' && selectedCases.some((c: any) => getCaseAutomationSource(c) !== 'manual') && (
               <div className="rounded-xl border border-border/60 overflow-hidden">
                 <button
                   type="button"
@@ -1825,7 +1802,7 @@ export function CreateRunModal({
                     Automated runner settings
                   </span>
                   <span className="flex items-center gap-2 text-[11px] font-normal text-muted-foreground">
-                    <span>Environment: {formData.environment || 'UAT'}</span>
+                    <span>Delay {interCaseDelaySec}s · Sequential</span>
                     <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showAutomatedSettings && 'rotate-180')} />
                   </span>
                 </button>
@@ -1883,42 +1860,6 @@ export function CreateRunModal({
               </div>
             )}
 
-            {/* Selected Suite Section (Positioned right above the case selection tabs) */}
-            {selectedSuitesList.length > 0 && (
-              <div className="min-w-0">
-                <label className="block text-xs font-semibold text-foreground/90 mb-1.5">
-                  Selected Suite{selectedSuitesList.length > 1 ? 's' : ''}
-                </label>
-                <div className="flex items-center gap-2 flex-wrap px-3 py-2 rounded-xl border border-border/60 bg-muted/20">
-                  {selectedSuitesList.map((s: any) => (
-                    <div
-                      key={s.id}
-                      className="inline-flex items-center gap-2 text-xs font-medium text-foreground min-w-0"
-                    >
-                      <Layers className="h-3.5 w-3.5 text-primary shrink-0" />
-                      <span className="font-semibold truncate">{s.name}</span>
-                      {s.type && (
-                        <>
-                          <span className="text-muted-foreground/40">·</span>
-                          <SuiteTypeBadge type={s.type} />
-                        </>
-                      )}
-                      <span className="text-[11px] font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded border border-border/50">
-                        {s.selectedCount}/{s.cases.length} cases
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleSuite(s.id)}
-                        className="p-0.5 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                        title="Unselect suite"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* Only show Pre-flight Advisory when variables or parameters are actually missing */}
             {preflightReport && !preflightReport.valid && (
@@ -1947,35 +1888,31 @@ export function CreateRunModal({
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <TabsList className="grid grid-cols-2 w-full sm:w-[320px] h-8">
                   <TabsTrigger value="suites" className="text-xs py-1">
-                    From Suites ({displayedSuites.length})
+                    Suite ({displayedSuites.length})
                   </TabsTrigger>
                   <TabsTrigger value="repository" className="text-xs py-1">
-                    From Repository ({filteredRepositoryCases.length})
+                    Pick cases ({filteredRepositoryCases.length})
                   </TabsTrigger>
                 </TabsList>
               </div>
 
               {/* TAB 1: FROM SUITES */}
               <TabsContent value="suites" className="mt-2 space-y-2 min-w-0 w-full">
-                {displayedSuites.length > 0 && (
-                  <div className="flex items-center justify-between px-3 py-1.5 rounded-lg border border-border/60 bg-muted/20 text-xs gap-2">
-                    <span className="text-muted-foreground font-medium">Select a suite for this run</span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleToggleExpandAllSuites(expandedSuites.size < displayedSuites.length)}
-                      className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
-                    >
-                      {expandedSuites.size < displayedSuites.length ? 'Expand all' : 'Collapse all'}
-                    </Button>
-                  </div>
-                )}
+                <div className="relative min-w-0">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                  <Input
+                    placeholder="Search suites..."
+                    value={suiteSearch}
+                    onChange={(e) => setSuiteSearch(e.target.value)}
+                    className="pl-9 h-8 text-xs w-full bg-background"
+                    aria-label="Search suites for this run"
+                  />
+                </div>
 
                 <div className="space-y-1.5 min-h-[200px] max-h-[260px] overflow-y-auto pr-1 min-w-0">
                   {displayedSuites.length === 0 && (
                     <p className="text-xs text-muted-foreground text-center py-6">
-                      {isFilterActive
+                      {isFilterActive || Boolean(suiteSearch)
                         ? 'No test suites match the selected filter'
                         : 'No suites available'}
                     </p>
@@ -1988,45 +1925,35 @@ export function CreateRunModal({
                       <div
                         key={suite.id}
                         className={cn(
-                          'border rounded-xl overflow-hidden transition-colors min-w-0',
+                          'rounded-xl border px-3 py-2 transition-colors min-w-0',
                           selectedInSuite > 0
-                            ? 'border-primary/40 bg-primary/[0.03]'
+                            ? 'border-primary/40 bg-primary/[0.05]'
                             : 'border-border/60 bg-card/40'
                         )}
                       >
-                        <div className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted/30 transition-colors min-w-0">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <button
                             type="button"
-                            onClick={() => handleToggleExpand(suite.id)}
-                            className="p-0.5 hover:text-foreground text-muted-foreground transition-colors cursor-pointer shrink-0"
-                            title={isExpanded ? 'Hide cases' : 'Show cases & assignees'}
+                            role="radio"
+                            aria-checked={selectedInSuite > 0}
+                            onClick={() => handleToggleSuite(suite.id)}
+                            className="shrink-0 inline-flex items-center justify-center h-4 w-4 rounded-full border border-border/70 bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
                           >
-                            {isExpanded ? (
-                              <ChevronDown className="h-4 w-4" />
-                            ) : (
-                              <ChevronRightIcon className="h-4 w-4" />
-                            )}
+                            {selectedInSuite > 0 ? <span className="h-2 w-2 rounded-full bg-primary" /> : null}
                           </button>
-                          <Checkbox
-                            checked={allSuiteCasesSelected(suite.id)}
-                            ref={(el) => {
-                              if (el) {
-                                const indeterminate = someSuiteCasesSelected(suite.id);
-                                (el as any).indeterminate = indeterminate;
-                              }
-                            }}
-                            onCheckedChange={() => handleToggleSuite(suite.id)}
-                          />
-                          <span
-                            className="text-xs font-semibold flex-1 min-w-0 truncate cursor-pointer text-foreground hover:text-primary transition-colors"
-                            onClick={() => handleToggleExpand(suite.id)}
-                          >
-                            {suite.name}
-                          </span>
+                          <span className="text-xs font-semibold flex-1 min-w-0 truncate text-foreground">{suite.name}</span>
                           {suite.type && <SuiteTypeBadge type={suite.type} className="shrink-0" />}
                           <span className="text-[11px] font-mono text-muted-foreground bg-muted/60 px-2 py-0.5 rounded border border-border/50 shrink-0">
-                            {selectedInSuite}/{suite.cases.length}
+                            {selectedInSuite} of {suite.cases.length} selected
                           </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleToggleExpand(suite.id)}
+                            className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer shrink-0"
+                          >
+                            Customize
+                          </Button>
                         </div>
 
                         {isExpanded && (
@@ -2348,57 +2275,63 @@ export function CreateRunModal({
 
           {/* Flush Modal Footer */}
           <div className="border-t border-border/50 bg-muted/15 px-5 py-3 flex items-center justify-between gap-4 shrink-0">
+            {runType === 'manual' ? (
+              <span className="text-xs text-muted-foreground truncate">
+                <strong className="text-foreground font-semibold">
+                  {selectedSuitesList.length === 1
+                    ? String(selectedSuitesList[0].name)
+                    : selectedSuitesList.length > 1
+                      ? `${selectedSuitesList.length} suites`
+                      : 'Selected'}
+                </strong>
+                {' · '}
+                {selectedCaseIds.size} cases · {runModeLabel || 'Manual'}
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                <strong className="text-foreground font-mono">{externalSelectionCount}</strong>{' '}
+                {runType === 'postman' ? 'request' : 'test'}
+                {externalSelectionCount !== 1 ? 's' : ''} selected
+              </span>
+            )}
+
             <div className="flex items-center gap-3">
               <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} className="h-8 px-3.5 text-xs">
                 Cancel
               </Button>
               {runType === 'manual' ? (
-                assignedSelectedCount > 0 ? (
-                  <span className="text-xs text-muted-foreground">
-                    <strong className="text-foreground font-mono">{assignedSelectedCount}</strong> assigned
-                  </span>
-                ) : null
+                <Button
+                  size="sm"
+                  onClick={() => handleStart(false)}
+                  disabled={starting || !formData.name.trim() || selectedCaseIds.size === 0}
+                  className="gradient-btn text-white h-8 px-4 text-xs font-semibold gap-1.5 shrink-0"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  <span>{starting ? 'Starting...' : `Start Run (${selectedCaseIds.size})`}</span>
+                </Button>
               ) : (
-                <span className="text-xs text-muted-foreground">
-                  <strong className="text-foreground font-mono">{externalSelectionCount}</strong>{' '}
-                  {runType === 'postman' ? 'request' : 'test'}
-                  {externalSelectionCount !== 1 ? 's' : ''} selected
-                </span>
+                <Button
+                  size="sm"
+                  onClick={handleStartExternal}
+                  disabled={
+                    starting ||
+                    externalSelectionCount === 0 ||
+                    !externalRunName.trim() ||
+                    postmanStartBlocked
+                  }
+                  className="gradient-btn text-white h-8 px-4 text-xs font-semibold gap-1.5 shrink-0"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  <span>
+                    {starting
+                      ? 'Starting...'
+                      : runType === 'postman'
+                      ? `Start Postman Run (${selectedExternalCaseIds.size})`
+                      : `Start Datadog Run (${selectedExternalCaseIds.size})`}
+                  </span>
+                </Button>
               )}
             </div>
-
-            {runType === 'manual' ? (
-              <Button
-                size="sm"
-                onClick={() => handleStart(false)}
-                disabled={starting || !formData.name.trim() || selectedCaseIds.size === 0}
-                className="gradient-btn text-white h-8 px-4 text-xs font-semibold gap-1.5 shrink-0"
-              >
-                <Play className="h-3.5 w-3.5" />
-                <span>{starting ? 'Starting...' : `Start Run (${selectedCaseIds.size})`}</span>
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                onClick={handleStartExternal}
-                disabled={
-                  starting ||
-                  externalSelectionCount === 0 ||
-                  !externalRunName.trim() ||
-                  postmanStartBlocked
-                }
-                className="gradient-btn text-white h-8 px-4 text-xs font-semibold gap-1.5 shrink-0"
-              >
-                <Play className="h-3.5 w-3.5" />
-                <span>
-                  {starting
-                    ? 'Starting...'
-                    : runType === 'postman'
-                    ? `Start Postman Run (${selectedExternalCaseIds.size})`
-                    : `Start Datadog Run (${selectedExternalCaseIds.size})`}
-                </span>
-              </Button>
-            )}
           </div>
         </DialogContent>
       </Dialog>

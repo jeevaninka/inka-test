@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -16,11 +16,16 @@ import {
   Loader2,
   Check,
   RotateCcw,
+  Tag,
+  SlidersHorizontal,
+  ExternalLink,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { updateProjectReviewSettingAction } from '@/app/actions/reviews';
 import { getEnvironmentsAction } from '@/app/actions/variables';
+import { TagsManagerModal } from '@/components/cases/TagsManagerModal';
+import { getProjectCasesForTagsAction } from '@/app/actions/cases';
 
 type ConfigSection = 'repository' | 'reviews' | 'runs' | 'releases' | 'retention';
 
@@ -125,12 +130,38 @@ const NAV_SECTIONS: {
   },
 ];
 
+interface TestCaseTagItem {
+  id: string;
+  tags: string[];
+  title: string;
+  displayId: string;
+}
+
 export default function ProjectConfigurationSettingsPage() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const { slug } = params as Record<string, string>;
   const { project, modules = [] } = useProjectData();
   const projectIdOrSlug = project?.id || slug;
+
+  const [showTagsModal, setShowTagsModal] = useState(false);
+  const [tagCases, setTagCases] = useState<TestCaseTagItem[]>([]);
+  const [loadingTagCases, setLoadingTagCases] = useState(false);
+
+  const handleOpenTagsModal = async () => {
+    if (!project?.id) return;
+    setLoadingTagCases(true);
+    try {
+      const cases = await getProjectCasesForTagsAction(project.id);
+      setTagCases(cases || []);
+      setShowTagsModal(true);
+    } catch {
+      toast.error('Failed to load project cases for tag management');
+    } finally {
+      setLoadingTagCases(false);
+    }
+  };
 
   const initialSectionParam = searchParams.get('section') as ConfigSection | null;
   const [activeSection, setActiveSection] = useState<ConfigSection>(
@@ -150,7 +181,7 @@ export default function ProjectConfigurationSettingsPage() {
     ...DEFAULT_CONFIG,
     reviewRequired: Boolean(project?.review_required ?? project?.reviewRequired ?? false),
   }));
-  const [environments, setEnvironments] = useState<any[]>([]);
+  const [environments, setEnvironments] = useState<Array<{ id?: string; name: string }>>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -168,6 +199,7 @@ export default function ProjectConfigurationSettingsPage() {
             project?.review_required ?? project?.reviewRequired ?? parsed.reviewRequired ?? false
           ),
         };
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setSavedConfig(merged);
         setDraftConfig(merged);
       } catch {
@@ -204,8 +236,8 @@ export default function ProjectConfigurationSettingsPage() {
     return [
       { value: '', label: 'None (Unassigned)' },
       ...modules
-        .filter((m: any) => !m.parentId)
-        .map((m: any) => ({ value: m.id, label: m.name })),
+        .filter((m: { id: string; name: string; parentId?: string | null }) => !m.parentId)
+        .map((m: { id: string; name: string }) => ({ value: m.id, label: m.name })),
     ];
   }, [modules]);
 
@@ -441,6 +473,62 @@ export default function ProjectConfigurationSettingsPage() {
                       </div>
                     );
                   })}
+                </div>
+              </div>
+
+              {/* Repository Tags Management */}
+              <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <h4 className="font-medium text-xs sm:text-sm text-foreground flex items-center gap-1.5">
+                    <Tag className="h-4 w-4 text-primary" />
+                    <span>Repository Tags</span>
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    Manage, rename, merge, and clean up test case tags across this project.
+                  </p>
+                </div>
+                <div className="shrink-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleOpenTagsModal()}
+                    disabled={loadingTagCases}
+                    className="h-8 text-xs font-semibold gap-1.5 cursor-pointer"
+                  >
+                    {loadingTagCases ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Tag className="h-3.5 w-3.5" />
+                    )}
+                    <span>Manage Repository Tags</span>
+                  </Button>
+                </div>
+              </div>
+
+              {/* Custom Fields Management */}
+              <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <h4 className="font-medium text-xs sm:text-sm text-foreground flex items-center gap-1.5">
+                    <SlidersHorizontal className="h-4 w-4 text-primary" />
+                    <span>Custom Fields & Properties</span>
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    Define custom properties, dropdown options, and metadata schema for cases, runs, and defects.
+                  </p>
+                </div>
+                <div className="shrink-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.push(`/p/${slug}/configuration/fields`)}
+                    className="h-8 text-xs font-semibold gap-1.5 cursor-pointer"
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                    <span>Manage Custom Fields</span>
+                    <ExternalLink className="h-3 w-3 opacity-60" />
+                  </Button>
                 </div>
               </div>
             </div>
@@ -790,6 +878,18 @@ export default function ProjectConfigurationSettingsPage() {
           )}
         </div>
       </div>
+
+      {project?.id && (
+        <TagsManagerModal
+          open={showTagsModal}
+          onOpenChange={setShowTagsModal}
+          projectId={project.id}
+          cases={tagCases}
+          onTagsUpdated={(updatedCases) => {
+            setTagCases(updatedCases);
+          }}
+        />
+      )}
     </div>
   );
 }

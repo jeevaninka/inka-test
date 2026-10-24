@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
 import { apiClient } from '@/lib/apiClient';
 import { ExecutionConsole } from '../ExecutionConsole';
@@ -15,6 +16,23 @@ import { getTestRunByIdAction } from '@/app/actions/runs';
 /** Hard ceiling on any single load so the page can never hang on a spinner. */
 const LOAD_TIMEOUT_MS = 15_000;
 
+/** Rejects with a readable error instead of letting a request hang forever. */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
 type RunLookup = 'idle' | 'loading' | 'ready' | 'missing';
 type ResultsStatus = 'loading' | 'ready' | 'error';
 
@@ -22,13 +40,8 @@ export default function TestCaseExecutionPage() {
   const params = useParams();
   const { slug, runId, caseKey } = params as Record<string, string>;
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  const [results, setResults] = useState<any[]>([]);
-  const [resultsStatus, setResultsStatus] = useState<ResultsStatus>('loading');
-  const [resultsError, setResultsError] = useState<string>('');
-  const [retryToken, setRetryToken] = useState(0);
-  const [liveRun, setLiveRun] = useState<any>(null);
-  const [runLookup, setRunLookup] = useState<RunLookup>('idle');
   const [open, setOpen] = useState(true);
 
   const handleClose = useCallback(() => {
@@ -54,94 +67,73 @@ export default function TestCaseExecutionPage() {
   const runs = projectData.runs || [];
   const currentUser = projectData.currentUser;
   const contextRun = runs.find((r: any) => r.id === runId) as any;
-  const run = liveRun || contextRun;
 
   /**
    * The run may be missing from the project context (freshly created async
-   * external runs, or a stale layout payload). Fetch it directly instead of
-   * spinning forever.
+   * external runs, or a stale layout payload). The query is bounded by a
+   * timeout so a slow request can never leave the page on a spinner forever.
    */
+  const runQuery = useQuery({
+    queryKey: ['run', runId],
+    queryFn: () =>
+      withTimeout(getTestRunByIdAction(runId), LOAD_TIMEOUT_MS, 'Loading the run timed out.'),
+    enabled: !!runId,
+    initialData: contextRun ?? undefined,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const run = runQuery.data ?? contextRun;
+  const runLookup: RunLookup = run
+    ? 'ready'
+    : runQuery.isPending
+      ? 'loading'
+      : 'missing';
+  const resultsQuery = useQuery({
+    queryKey: ['run-results', runId],
+    queryFn: () =>
+      withTimeout(
+        apiClient.get<any[]>(
+          `/api/v1/runs/${encodeURIComponent(runId)}/results`,
+          undefined,
+          { forceRefresh: true }
+        ),
+        LOAD_TIMEOUT_MS,
+        'Loading execution results timed out. The run may still be executing.'
+      ),
+    enabled: !!runId,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const results = useMemo(() => resultsQuery.data ?? [], [resultsQuery.data]);
+  const resultsStatus: ResultsStatus = resultsQuery.isPending
+    ? 'loading'
+    : resultsQuery.isError
+      ? 'error'
+      : 'ready';
+  const resultsError = resultsQuery.isError
+    ? resultsQuery.error?.message || 'Failed to load execution results'
+    : '';
+
   useEffect(() => {
-    if (contextRun || !runId) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    if (resultsQuery.isError && resultsError) toast.error(resultsError);
+  }, [resultsQuery.isError, resultsError]);
 
-    setRunLookup('loading');
-    timer = setTimeout(() => {
-      if (!cancelled) setRunLookup('missing');
-    }, LOAD_TIMEOUT_MS);
+  const setResults = useCallback(
+    (next: any[]) => queryClient.setQueryData(['run-results', runId], next),
+    [queryClient, runId]
+  );
 
-    getTestRunByIdAction(runId)
-      .then((data) => {
-        if (cancelled) return;
-        if (data) {
-          setLiveRun(data);
-          setRunLookup('ready');
-        } else {
-          setRunLookup('missing');
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setRunLookup('missing');
-      });
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [contextRun, runId, retryToken]);
-
-  /**
-   * Load the run results. The request is bounded by a timeout and always
-   * resolves to an explicit state, so a slow or failed request can never
-   * leave the page on a permanent spinner.
-   */
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    setResultsStatus('loading');
-    setResultsError('');
-
-    timer = setTimeout(() => {
-      if (cancelled) return;
-      setResultsStatus('error');
-      setResultsError('Loading execution results timed out. The run may still be executing.');
-    }, LOAD_TIMEOUT_MS);
-
-    apiClient.get<any[]>(`/api/v1/runs/${encodeURIComponent(runId)}/results`, undefined, { forceRefresh: true })
-      .then((data) => {
-        if (cancelled) return;
-        if (timer) clearTimeout(timer);
-        setResults(data || []);
-        setResultsStatus('ready');
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        if (timer) clearTimeout(timer);
-        const message = err?.message || 'Failed to load execution results';
-        setResultsError(message);
-        setResultsStatus('error');
-        toast.error(message);
-      });
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [runId, retryToken]);
+  const retry = useCallback(() => {
+    void runQuery.refetch();
+    void resultsQuery.refetch();
+  }, [runQuery, resultsQuery]);
 
   const getCase = useCallback((id: string) => cases.find((c: any) => c.id === id), [cases]);
 
   const refetchResults = useCallback(async () => {
-    const data = await apiClient.get<any[]>(
-      `/api/v1/runs/${encodeURIComponent(runId)}/results`,
-      undefined,
-      { forceRefresh: true }
-    );
+    const { data } = await resultsQuery.refetch();
     if (data) setResults(data);
-  }, [runId]);
+  }, [resultsQuery, setResults]);
 
   const progress = useMemo(() => {
     return {
@@ -182,11 +174,7 @@ export default function TestCaseExecutionPage() {
           <Button
             type="button"
             size="sm"
-            onClick={() => {
-              setRunLookup('idle');
-              setLiveRun(null);
-              setRetryToken((t) => t + 1);
-            }}
+            onClick={retry}
             className="h-8 px-3 text-xs gap-1.5 cursor-pointer"
           >
             <RotateCw className="h-3.5 w-3.5" />
@@ -226,7 +214,7 @@ export default function TestCaseExecutionPage() {
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => setRetryToken((t) => t + 1)}
+            onClick={retry}
             className="h-6 px-2 text-[11px] gap-1 cursor-pointer shrink-0"
           >
             <RotateCw className="h-3 w-3" />

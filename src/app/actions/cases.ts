@@ -780,6 +780,25 @@ export async function importTestCasesAction(data: {
   return results;
 }
 
+export async function getProjectCasesForTagsAction(projectId: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) throw new Error('Unauthorized');
+  const userId = (session.user as any).id as number;
+  await requireProjectMember(projectId, userId);
+
+  const cases = await prisma.testCase.findMany({
+    where: { project_id: projectId, deleted_at: null },
+    select: { id: true, tags: true, title: true, display_id: true },
+  });
+
+  return cases.map((c) => ({
+    id: c.id,
+    tags: c.tags || [],
+    title: c.title,
+    displayId: c.display_id,
+  }));
+}
+
 export async function bulkAddTagsAction(caseIds: string[], tagsToAdd: string[]) {
   const session = await getServerSession(authOptions);
   if (!session?.user) throw new Error('Unauthorized');

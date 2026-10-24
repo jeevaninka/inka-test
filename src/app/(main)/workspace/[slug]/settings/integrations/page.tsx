@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import {
-  Layers, Key, Plus, Loader2, Copy, RefreshCw,
+  Layers, Key, Plus, Loader2, Copy, RefreshCw, ChevronDown, ChevronLeft,
   ExternalLink, ArrowDownLeft, ArrowUpRight, CheckCircle2, AlertCircle,
   Activity, Check, ShieldCheck, Webhook as WebhookIcon, Workflow,
   Filter, Trash2, Edit3
@@ -16,7 +16,6 @@ import { logger } from '@/lib/logger.client';
 import {
   IntegrationCard,
   IntegrationCardGrid,
-  IntegrationCardSection,
 } from '@/components/settings/IntegrationCard';
 import {
   SlackLogo,
@@ -143,7 +142,7 @@ export default function WorkspaceIntegrationsPage() {
         appKey: '',
         envStartUrls: { DEV: '', STAGING: '', UAT: '', PROD: '' },
         defaultExecutionRule: 'blocking',
-        defaultPollingTimeoutMs: 35000,
+        defaultMonitoringExpiryMs: 35000,
       },
     },
   });
@@ -579,7 +578,7 @@ export default function WorkspaceIntegrationsPage() {
                       </span>
                       <div className="flex-1 min-w-0">
                         {discoveredEnvs.length > 0 ? (
-                          <select
+                          <Select
                             value={envMap[envKey] || ''}
                             onChange={(e) =>
                               updateToolConfigField('postman', 'envMapping', {
@@ -587,15 +586,15 @@ export default function WorkspaceIntegrationsPage() {
                                 [envKey]: e.target.value,
                               })
                             }
-                            className="w-full h-8 rounded-lg border border-input bg-background px-2.5 text-xs font-mono text-foreground"
-                          >
-                            <option value="">None (Use InkaTest Vars only)</option>
-                            {discoveredEnvs.map((pe) => (
-                              <option key={pe.uid} value={pe.uid}>
-                                {pe.name} ({pe.uid})
-                              </option>
-                            ))}
-                          </select>
+                            options={[
+                              { value: '', label: 'None (Use InkaTest Vars only)' },
+                              ...discoveredEnvs.map((pe) => ({
+                                value: pe.uid,
+                                label: `${pe.name} (${pe.uid})`
+                              }))
+                            ]}
+                            className="w-full h-8 rounded-lg font-mono"
+                          />
                         ) : (
                           <Input
                             value={envMap[envKey] || ''}
@@ -825,14 +824,19 @@ export default function WorkspaceIntegrationsPage() {
           ],
           extraContent: (
             <div className="space-y-4 pt-2 border-t border-border/50">
-              <div className="space-y-2.5">
-                <label className="text-xs font-semibold text-foreground block">
-                  Environment Start URL Overrides (Optional)
-                </label>
-                <p className="text-[11px] text-muted-foreground">
-                  Override the target Start URL passed to Datadog Synthetics when running against DEV, STAGING, UAT, or PROD. All InkaTest variables are also injected automatically.
-                </p>
-                <div className="space-y-2 pt-1">
+              <details className="group space-y-2.5">
+                <summary className="list-none cursor-pointer flex items-center justify-between py-1 hover:opacity-80 transition-opacity">
+                  <div className="flex flex-col">
+                    <label className="text-xs font-semibold text-foreground block cursor-pointer">
+                      Environment Start URL Overrides (Optional)
+                    </label>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Override the target Start URL passed to Datadog Synthetics when running against DEV, STAGING, UAT, or PROD. All InkaTest variables are also injected automatically.
+                    </p>
+                  </div>
+                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="space-y-2 pt-2 border-t border-border/40">
                   {envKeys.map((envKey) => (
                     <div key={envKey} className="flex items-center gap-2">
                       <span className="w-28 shrink-0 font-mono text-[11px] font-bold uppercase text-foreground bg-muted/70 px-2.5 py-1.5 rounded-lg border border-border/70 truncate text-center">
@@ -902,42 +906,44 @@ export default function WorkspaceIntegrationsPage() {
                     </Button>
                   </div>
                 </div>
-              </div>
+              </details>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2 border-t border-border/40">
                 <div className="space-y-1">
                   <span className="text-[10px] font-mono text-muted-foreground">
                     Default Execution Rule
                   </span>
-                  <select
+                  <Select
                     value={cfg.defaultExecutionRule || 'blocking'}
                     onChange={(e) =>
                       updateToolConfigField('datadog', 'defaultExecutionRule', e.target.value)
                     }
-                    className="w-full h-8 rounded-lg border border-input bg-background px-2 text-xs font-medium text-foreground"
-                  >
-                    <option value="blocking">Blocking (Fail case on failure)</option>
-                    <option value="non_blocking">Non-blocking (Log only)</option>
-                    <option value="skipped">Skipped (Skip synthetic execution)</option>
-                  </select>
+                    options={[
+                      { value: 'blocking', label: 'Blocking (Wait & fail case if it fails)' },
+                      { value: 'non_blocking', label: 'Non-blocking (Trigger & immediately pass)' },
+                      { value: 'skipped', label: 'Skipped (Skip synthetic execution)' }
+                    ]}
+                    className="w-full h-8 rounded-lg"
+                  />
                 </div>
 
                 <div className="space-y-1">
                   <span className="text-[10px] font-mono text-muted-foreground">
-                    Max Result Poll Timeout
+                    Max Result Monitor Timeout
                   </span>
-                  <select
-                    value={String(cfg.defaultPollingTimeoutMs ?? 35000)}
+                  <Select
+                    value={String(cfg.defaultMonitoringExpiryMs ?? 1800000)}
                     onChange={(e) =>
-                      updateToolConfigField('datadog', 'defaultPollingTimeoutMs', Number(e.target.value))
+                      updateToolConfigField('datadog', 'defaultMonitoringExpiryMs', Number(e.target.value))
                     }
-                    className="w-full h-8 rounded-lg border border-input bg-background px-2 text-xs font-mono text-foreground"
-                  >
-                    <option value="15000">15 seconds</option>
-                    <option value="35000">35 seconds (Default)</option>
-                    <option value="60000">60 seconds</option>
-                    <option value="90000">90 seconds</option>
-                  </select>
+                    options={[
+                      { value: '900000', label: '15 minutes' },
+                      { value: '1800000', label: '30 minutes (Default)' },
+                      { value: '3600000', label: '60 minutes' },
+                      { value: '7200000', label: '120 minutes' }
+                    ]}
+                    className="w-full h-8 rounded-lg font-mono"
+                  />
                 </div>
               </div>
             </div>
@@ -1107,62 +1113,30 @@ export default function WorkspaceIntegrationsPage() {
 
   return (
     <div className="space-y-6 w-full">
-      {/* ── Sub-Tabs Navigation (Integrations · Activity log) + Add Integration Button ── */}
-      <div className="border-b border-border/50 flex items-center justify-between gap-4 pb-2.5">
-        <div className="flex gap-6">
-          <button
-            onClick={() => setActiveTab('integrations')}
-            className={cn(
-              'relative py-2 text-sm font-semibold transition-colors cursor-pointer',
-              activeTab === 'integrations'
-                ? 'text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            Integrations
-            {activeTab === 'integrations' && (
-              <div className="absolute -bottom-2.5 left-0 right-0 h-0.5 bg-primary" />
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('activity')}
-            className={cn(
-              'relative py-2 text-sm font-semibold transition-colors cursor-pointer flex items-center gap-1.5',
-              activeTab === 'activity'
-                ? 'text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            <Activity className="h-3.5 w-3.5" />
-            <span>Activity log</span>
-            {activityLogs.length > 0 && (
-              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground">
-                {activityLogs.length}
-              </span>
-            )}
-            {activeTab === 'activity' && (
-              <div className="absolute -bottom-2.5 left-0 right-0 h-0.5 bg-primary" />
-            )}
-          </button>
-        </div>
-
+      {/* ── Workspace Integrations hub (cards only, activity via header button) ── */}
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-sm text-muted-foreground max-w-2xl">
+          Connect tools once for the whole workspace. Projects inherit these settings unless overridden.
+        </p>
         <Button
           size="sm"
-          onClick={() => setShowAddIntegrationModal(true)}
-          className="gradient-btn text-white h-9 px-4 rounded-xl text-xs font-semibold gap-1.5 shadow-sm cursor-pointer shrink-0"
+          variant="outline"
+          onClick={() => setActiveTab('activity')}
+          className="h-9 px-4 rounded-xl text-xs font-semibold gap-1.5 border-border/80 bg-muted/40 hover:bg-muted shadow-xs cursor-pointer shrink-0"
         >
-          <Plus className="h-4 w-4" />
-          <span>Add Integration</span>
+          <Activity className="h-4 w-4" />
+          <span>Activity log ({activityLogs.length})</span>
         </Button>
       </div>
 
       {/* ── TAB 1: INTEGRATIONS (8-Card Compact 4-Column Hub) ── */}
       {activeTab === 'integrations' && (
-        <IntegrationCardSection
-          title="Workspace Integrations"
-          description="Connect tools once at the workspace level. All projects inherit these settings unless overridden."
-        >
+        <div className="space-y-3">
+          <div>
+            <p className="text-sm text-muted-foreground">
+              Connect tools once for the whole workspace. Projects inherit these settings unless overridden.
+            </p>
+          </div>
           <IntegrationCardGrid columns={4}>
             {/* Box 1: InkaBoard */}
             <IntegrationCard
@@ -1172,6 +1146,7 @@ export default function WorkspaceIntegrationsPage() {
               category="Issue Tracker & Releases"
               description="Synchronize bugs, requirements, and release status natively."
               status={isPmConfigured ? 'connected' : 'not_connected'}
+              order={isPmConfigured ? 0 : 1}
               statusSignal={inkaBoardSignal}
               onAction={() => {
                 setPmTestResult(null);
@@ -1187,6 +1162,7 @@ export default function WorkspaceIntegrationsPage() {
               category="API Collection Runner"
               description="1-click API collection runner with environment mapping, dataset parametrization & request delays."
               status={toolStates.postman?.enabled && toolStates.postman?.config?.apiKey ? 'connected' : 'not_connected'}
+              order={toolStates.postman?.enabled && toolStates.postman?.config?.apiKey ? 0 : 1}
               meta={
                 toolStates.postman?.enabled && toolStates.postman?.config?.apiKey
                   ? `Delay: ${toolStates.postman.config.defaultDelayMs ?? 250}ms · Timeout: ${(toolStates.postman.config.defaultTimeoutMs ?? 15000) / 1000}s`
@@ -1210,6 +1186,11 @@ export default function WorkspaceIntegrationsPage() {
                   ? 'connected'
                   : 'not_connected'
               }
+              order={
+                toolStates.datadog?.enabled && toolStates.datadog?.config?.apiKey && toolStates.datadog?.config?.appKey
+                  ? 0
+                  : 1
+              }
               meta={
                 toolStates.datadog?.enabled && toolStates.datadog?.config?.apiKey
                   ? `Site: ${toolStates.datadog.config.site || 'datadoghq.com'} · Rule: ${toolStates.datadog.config.defaultExecutionRule || 'blocking'}`
@@ -1229,6 +1210,7 @@ export default function WorkspaceIntegrationsPage() {
               category="Team Messaging"
               description="Broadcast test run summaries, failures, and review alerts to Slack channels."
               status={isSlackConfigured ? 'connected' : 'not_connected'}
+              order={isSlackConfigured ? 0 : 1}
               statusSignal={slackSignal}
               onAction={() => {
                 setSlackTestResult(null);
@@ -1247,6 +1229,11 @@ export default function WorkspaceIntegrationsPage() {
                 toolStates.confluence?.enabled && toolStates.confluence?.config?.apiToken
                   ? 'connected'
                   : 'not_connected'
+              }
+              order={
+                toolStates.confluence?.enabled && toolStates.confluence?.config?.apiToken
+                  ? 0
+                  : 1
               }
               meta={
                 toolStates.confluence?.config?.defaultSpaceKey
@@ -1267,6 +1254,7 @@ export default function WorkspaceIntegrationsPage() {
               category="Docs & Wiki Sync"
               description="Sync Notion requirement pages and acceptance criteria with test cases."
               status={toolStates.notion?.enabled && toolStates.notion?.config?.apiToken ? 'connected' : 'not_connected'}
+              order={toolStates.notion?.enabled && toolStates.notion?.config?.apiToken ? 0 : 1}
               onAction={() => {
                 setToolTestResult(null);
                 setActiveModal('notion');
@@ -1281,6 +1269,7 @@ export default function WorkspaceIntegrationsPage() {
               category="Design Specs"
               description="Preview live Figma frames inside test cases and steps during manual execution."
               status={toolStates.figma?.enabled && toolStates.figma?.config?.accessToken ? 'connected' : 'not_connected'}
+              order={toolStates.figma?.enabled && toolStates.figma?.config?.accessToken ? 0 : 1}
               onAction={() => {
                 setToolTestResult(null);
                 setActiveModal('figma');
@@ -1295,6 +1284,7 @@ export default function WorkspaceIntegrationsPage() {
               category="Custom HTTP Endpoint"
               description="Stream signed JSON event payloads (run.completed, defect.created) to external URLs."
               status={webhooks.length > 0 ? 'connected' : 'not_connected'}
+              order={webhooks.length > 0 ? 0 : 1}
               meta={webhooks.length > 0 ? `${webhooks.length} configured` : undefined}
               onAction={() => {
                 setSelectedWebhookId(null);
@@ -1303,7 +1293,7 @@ export default function WorkspaceIntegrationsPage() {
               }}
             />
           </IntegrationCardGrid>
-        </IntegrationCardSection>
+        </div>
       )}
 
       {/* ── TAB 2: ACTIVITY LOG (Compressed 42px Single-Line Rows) ── */}
@@ -1311,6 +1301,15 @@ export default function WorkspaceIntegrationsPage() {
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-2.5 flex-wrap">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setActiveTab('integrations')}
+                className="h-8 px-2.5 text-xs font-medium rounded-lg text-muted-foreground hover:text-foreground cursor-pointer"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                Integrations
+              </Button>
               <div className="flex items-center gap-1 bg-muted/20 p-1 rounded-xl border border-border/60 text-xs">
                 {(['ALL', 'INBOUND', 'OUTBOUND', 'ERRORS'] as const).map((tab) => (
                   <button

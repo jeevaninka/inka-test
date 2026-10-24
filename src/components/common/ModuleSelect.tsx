@@ -28,6 +28,8 @@ interface ModuleSelectProps {
   allowNone?: boolean;
   noneLabel?: string;
   autoLabel?: string;
+  /** Optional prefix added before the module name (e.g. "Module:"). */
+  labelPrefix?: string;
   /** Compact style for inline rows (per-case pickers). */
   size?: "md" | "sm";
   /** Creates a module and returns its id. When omitted, `onRequestCreate` is used. */
@@ -59,6 +61,7 @@ export function ModuleSelect({
   allowNone = true,
   noneLabel = "No module (Root)",
   autoLabel = "✨ Auto-detect module",
+  labelPrefix,
   size = "md",
   onInlineCreate,
   onRequestCreate,
@@ -84,8 +87,9 @@ export function ModuleSelect({
     const parent = selectedModule?.parentId
       ? (modules || []).find((m) => m.id === selectedModule.parentId)
       : null;
-    return parent ? `${parent.name} › ${selectedModule?.name}` : selectedModule?.name || "Select module";
-  }, [value, allowAutoDetect, autoLabel, allowNone, noneLabel, selectedModule, modules]);
+    const name = parent ? `${parent.name} › ${selectedModule?.name}` : selectedModule?.name || "Select module";
+    return labelPrefix ? `${labelPrefix} ${name}` : name;
+  }, [value, allowAutoDetect, autoLabel, allowNone, noneLabel, selectedModule, modules, labelPrefix]);
 
   // Search matches roots and sub-modules (breadcrumbed).
   const searchResults = useMemo(() => {
@@ -147,7 +151,7 @@ export function ModuleSelect({
           type="button"
           disabled={disabled}
           className={cn(
-            "flex w-full items-center justify-between gap-2 rounded-lg border border-input bg-background/80 px-3 font-medium text-foreground shadow-xs transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40 focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer text-left",
+            "inline-flex max-w-full items-center justify-between gap-2 rounded-lg border border-input bg-background/80 px-3 font-medium text-foreground shadow-xs transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40 focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer text-left",
             size === "sm" ? "h-6 text-[11px]" : "h-9 text-xs",
             className
           )}

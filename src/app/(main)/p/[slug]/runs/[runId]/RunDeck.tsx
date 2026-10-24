@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Button } from '@/components/ui/button';
@@ -24,7 +24,8 @@ import {
   ChevronDown, ChevronRight, Search, UserPlus, UserMinus,
   Copy, RotateCcw, ExternalLink, MoreVertical, MoreHorizontal, Trash2, Plus,
   X, User, Download, Share2, Clock, ArrowUpDown, ArrowUp, ArrowDown, Play,
-  Check, Sparkles, ListChecks, Layers, Edit, RefreshCw, Loader2, Pause, Filter
+  Check, Sparkles, ListChecks, Layers, Edit, RefreshCw, Loader2, Pause, Filter,
+  Bug, History, FileText
 } from 'lucide-react';
 import {
   finishRunAction,
@@ -36,6 +37,8 @@ import {
 } from '@/app/actions/runs';
 import { startExternalRunCasesAction, stopRunExecutionAction, rerunRunCasesAction, resumeExternalRunCasesAction } from '@/app/actions/integrations';
 import { Tooltip } from '@/components/ui/tooltip';
+import { getRunDefectsAction, type ProjectDefectItem } from '@/app/actions/defects';
+import { DefectDetailModal } from '@/components/runs/DefectDetailModal';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter
 } from '@/components/ui/dialog';
@@ -45,6 +48,8 @@ import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { ResultStatusBadge } from '@/components/common/ResultStatusBadge';
 import { StatusPill, type StatusPillTone } from '@/components/common/StatusPill';
 import { ProgressCircle } from '@/components/common/ProgressCircle';
+import { TeamProgressModal } from '@/components/runs/RunOverviewModal';
+import { buildTeamProgress } from '@/lib/runs/team-progress';
 import { ConfirmModal } from '@/components/common/ConfirmModal';
 import { CaseSourceIcon } from '@/components/common/CaseSourceIcon';
 import { getCaseAutomationSource, isAutomatedCase } from '@/lib/cases/automation-source';
@@ -334,9 +339,9 @@ function GroupingTabs({
   onChange,
 }: {
   value: RunGroupBy;
-  onChange: (mode: 'flat' | 'module') => void;
+  onChange: (mode: 'flat' | 'module' | 'assignee') => void;
 }) {
-  const modes = ['flat', 'module'] as const;
+  const modes = ['flat', 'module', 'assignee'] as const;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const buttonRefs = React.useRef<Record<string, HTMLButtonElement | null>>({});
   const [indicator, setIndicator] = React.useState({ left: 0, width: 0, ready: false });
@@ -477,8 +482,60 @@ export function RunDeck(props: RunDeckProps) {
   const [expandedIters, setExpandedIters] = useState<Set<string>>(new Set());
   const [expandAllIters, setExpandAllIters] = useState(false);
   const [editingModalAssigneeIter, setEditingModalAssigneeIter] = useState<number | null>(null);
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  const searchParams = useSearchParams();
+  const [deckTab, setDeckTab] = useState<'cases' | 'bugs' | 'history'>(() => {
+    const tab = searchParams?.get('tab');
+    if (tab === 'bugs' || tab === 'history') return tab;
+    return 'cases';
+  });
+  const [runDefects, setRunDefects] = useState<ProjectDefectItem[]>([]);
+  const [loadingDefects, setLoadingDefects] = useState(false);
+  const [selectedDefect, setSelectedDefect] = useState<ProjectDefectItem | null>(null);
+  const resolveAssignee = React.useCallback(
+    (leaf: any) => {
+      if (!leaf.assignedTo) return null;
+      const targetId = String(leaf.assignedTo);
+      const m = members.find(
+        (mem: any) =>
+          String(mem.userId ?? mem.user?.id ?? mem.id) === targetId ||
+          String(mem.user?.id) === targetId
+      );
+      if (!m) return null;
+      const u = m.user || m;
+      const name =
+        u.name ||
+        u.displayName ||
+        (u.email ? u.email.split('@')[0] : null) ||
+        `User #${targetId}`;
+      return {
+        id: targetId,
+        name,
+        email: u.email || null,
+        avatarUrl: u.avatarUrl || u.image || null,
+      };
+    },
+    [members]
+  );
+
   const [selectedIterIndices, setSelectedIterIndices] = useState<Set<number>>(new Set());
   const [assignItersResult, setAssignItersResult] = useState<any | null>(null);
+
+  const teamRows = useMemo(
+    () => buildTeamProgress(results as any, resolveAssignee),
+    [results, resolveAssignee]
+  );
+  const hasManualCases = teamRows.some((row: any) => row.id !== 'unassigned');
+
+  useEffect(() => {
+    if (!runId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoadingDefects(true);
+    getRunDefectsAction(runId)
+      .then((data) => setRunDefects(data || []))
+      .catch(() => setRunDefects([]))
+      .finally(() => setLoadingDefects(false));
+  }, [runId]);
 
   const toggleModuleCollapse = (moduleName: string) => {
     setCollapsedModules((prev) => {
@@ -804,6 +861,44 @@ export function RunDeck(props: RunDeckProps) {
       return groups;
     }
 
+    if (groupBy === 'assignee') {
+      const groups: { moduleName: string; moduleId: string | null; results: any[] }[] = [];
+      const assigneeMap = new Map<string | null, any[]>();
+
+      for (const result of results) {
+        const key = result.assignedTo != null ? String(result.assignedTo) : null;
+        if (!assigneeMap.has(key)) assigneeMap.set(key, []);
+        assigneeMap.get(key)!.push(result);
+      }
+
+      for (const [assigneeId, rs] of assigneeMap) {
+        if (assigneeId) {
+          const member = members.find(
+            (m: any) =>
+              String(m.userId ?? m.user?.id ?? m.id) === assigneeId ||
+              String(m.user?.id) === assigneeId
+          );
+          const user = member?.user || member;
+          const name =
+            user?.name ||
+            user?.displayName ||
+            (user?.email ? user.email.split('@')[0] : null) ||
+            `User #${assigneeId}`;
+          groups.push({ moduleName: name, moduleId: `assignee-${assigneeId}`, results: rs });
+        } else {
+          groups.push({ moduleName: 'Unassigned', moduleId: 'assignee-unassigned', results: rs });
+        }
+      }
+
+      groups.sort((a, b) => {
+        if (a.moduleId === 'assignee-unassigned') return 1;
+        if (b.moduleId === 'assignee-unassigned') return -1;
+        return a.moduleName.localeCompare(b.moduleName);
+      });
+
+      return groups;
+    }
+
     // Default: Group by module
     const groups: { moduleName: string; moduleId: string | null; results: any[] }[] = [];
     const moduleMap = new Map<string | null, any[]>();
@@ -834,7 +929,7 @@ export function RunDeck(props: RunDeckProps) {
     });
 
     return groups;
-  }, [results, getCase, modules, suites, groupBy]);
+  }, [results, getCase, modules, suites, members, groupBy]);
 
   // Filtered results
   const filteredResultsByModule = useMemo(() => {
@@ -1511,7 +1606,76 @@ export function RunDeck(props: RunDeckProps) {
               )}
             </div>
 
-            {/* Toolbar */}
+            {/* Run page tabs: Cases | Bugs | History */}
+            <div className="flex items-center gap-1 border-b border-border/60 pt-2 pb-0 min-w-0 w-full">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeckTab('cases');
+                  const url = new URL(window.location.href);
+                  url.searchParams.set('tab', 'cases');
+                  router.replace(url.pathname + url.search, { scroll: false });
+                }}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px transition-colors cursor-pointer select-none',
+                  deckTab === 'cases'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span>Cases</span>
+                <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
+                  {results.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDeckTab('bugs');
+                  const url = new URL(window.location.href);
+                  url.searchParams.set('tab', 'bugs');
+                  router.replace(url.pathname + url.search, { scroll: false });
+                }}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px transition-colors cursor-pointer select-none',
+                  deckTab === 'bugs'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <Bug className="h-3.5 w-3.5" />
+                <span>Bugs</span>
+                {runDefects.length > 0 && (
+                  <span className="ml-1 rounded-full bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-mono text-rose-500 font-bold">
+                    {runDefects.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDeckTab('history');
+                  const url = new URL(window.location.href);
+                  url.searchParams.set('tab', 'history');
+                  router.replace(url.pathname + url.search, { scroll: false });
+                }}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px transition-colors cursor-pointer select-none',
+                  deckTab === 'history'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <History className="h-3.5 w-3.5" />
+                <span>History</span>
+              </button>
+            </div>
+
+            {/* Toolbar (Only for Cases tab) */}
+            {deckTab === 'cases' && (
             <div className="flex items-center gap-2 flex-wrap min-w-0 w-full pt-1.5">
               <div className="relative flex-1 min-w-[160px] max-w-[220px]">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
@@ -1758,6 +1922,7 @@ export function RunDeck(props: RunDeckProps) {
                 </div>
               )}
             </div>
+            )}
           </div>
 
           {/* Right Column: Actions (title line) -> Ring with stats below */}
@@ -1826,6 +1991,13 @@ export function RunDeck(props: RunDeckProps) {
                       ? `Pass rate · ${passRate}%`
                       : `${completedCount} of ${total} completed`}
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => setOverviewOpen(true)}
+                    className="mt-1 cursor-pointer text-[10.5px] font-medium text-muted-foreground transition-colors hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                  >
+                    Team progress ›
+                  </button>
                   {/* Inline status breakdown text: hidden on smaller viewports (< 2xl) to prevent congestion */}
                   <div className="mt-0.5 hidden 2xl:flex max-w-[200px] flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
                     {(['fail', 'blocked', 'invalid', 'skip', 'pending', 'pass'] as const).map((s) => {
@@ -3724,6 +3896,216 @@ export function RunDeck(props: RunDeckProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TeamProgressModal
+        open={overviewOpen}
+        onOpenChange={setOverviewOpen}
+        slug={slug}
+        runId={runId}
+        run={run}
+        teamRows={teamRows}
+        hasManualCases={hasManualCases}
+        onSelectAssignee={(id: string) => {
+          updateViewFilters({ assignees: id === 'unassigned' ? [] : [id] });
+          setOverviewOpen(false);
+        }}
+        onGroupByAssignee={() => {
+          updateViewFilters({ groupBy: 'assignee' });
+          setOverviewOpen(false);
+        }}
+        onRefresh={refetchResults}
+      />
+
+      {/* ── Bugs Tab ── */}
+      {deckTab === 'bugs' && (
+        <div className="flex flex-col">
+          {loadingDefects && (
+            <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+              Loading bugs…
+            </div>
+          )}
+          {!loadingDefects && runDefects.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+              <Bug className="h-5 w-5 mb-2 opacity-40" />
+              <p className="text-sm font-semibold text-foreground">No bugs logged for this test run</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Defects raised against this run appear here.
+              </p>
+            </div>
+          )}
+          {!loadingDefects && runDefects.length > 0 && (
+            <div className="overflow-x-auto border border-border rounded-lg">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-border/60 bg-muted/30 [&_th]:text-[10px] [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                    <th className="px-4 py-3 text-left w-[48px]">Bug ID</th>
+                    <th className="px-4 py-3 text-left">Title &amp; Case</th>
+                    <th className="px-4 py-3 text-left w-[72px]">Severity</th>
+                    <th className="px-4 py-3 text-left w-[72px]">Status</th>
+                    <th className="px-4 py-3 text-left w-[110px]">Reported By</th>
+                    <th className="px-4 py-3 text-left w-[120px]">External Ticket</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runDefects.map((d: ProjectDefectItem) => {
+                    const sevKey = String(d.severity || '').toUpperCase();
+                    const sevConfig: Record<string, { label: string; className: string }> = {
+                      BLOCKER: { label: 'BLOCKER', className: 'bg-red-500/15 text-red-400 border-red-500/30' },
+                      CRITICAL: { label: 'CRITICAL', className: 'bg-red-500/15 text-red-400 border-red-500/30' },
+                      URGENT: { label: 'URGENT', className: 'bg-red-500/15 text-red-400 border-red-500/30' },
+                      HIGH: { label: 'HIGH', className: 'bg-orange-500/15 text-orange-400 border-orange-500/30' },
+                      MAJOR: { label: 'MAJOR', className: 'bg-orange-500/15 text-orange-400 border-orange-500/30' },
+                      MEDIUM: { label: 'MEDIUM', className: 'bg-amber-500/15 text-amber-400 border-amber-500/30' },
+                      LOW: { label: 'LOW', className: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
+                      MINOR: { label: 'MINOR', className: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
+                    };
+                    const sev = sevConfig[sevKey] || { label: sevKey || 'MEDIUM', className: 'bg-amber-500/15 text-amber-400 border-amber-500/30' };
+                    const isOpen = !['RESOLVED', 'CLOSED', 'WONT_FIX'].includes(String(d.localStatus || '').toUpperCase());
+                    const caseRef = d.testCaseDisplayId ? (
+                      <span className="font-mono text-[11px] text-muted-foreground block">{d.testCaseDisplayId}</span>
+                    ) : null;
+                    return (
+                      <tr
+                        key={d.id}
+                        onClick={() => setSelectedDefect(d)}
+                        className="border-b border-border/40 hover:bg-muted/50 cursor-pointer transition-colors text-xs"
+                      >
+                        <td className="px-4 py-3 font-mono text-[11px] font-semibold text-foreground">
+                          #{d.id}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-foreground truncate">{d.title}</div>
+                          {caseRef}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={cn(
+                            'px-2 py-0.5 rounded-full text-[10px] font-bold border font-mono',
+                            sev.className
+                          )}>{sev.label}</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={cn(
+                            'px-2 py-0.5 rounded-full text-[10px] font-bold border font-mono',
+                            isOpen
+                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                              : 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30'
+                          )}>
+                            {d.localStatus || 'Open'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[9px] font-bold">
+                              {(d.raisedByInitials || d.raisedByName?.[0] || '?').toUpperCase()}
+                            </div>
+                            <span className="text-[11px] text-foreground truncate">{d.raisedByName || 'User'}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          {d.ticketUrl ? (
+                            <a
+                              href={d.ticketUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[11px] text-primary underline underline-offset-2 hover:text-primary/80"
+                            >
+                              {d.externalTicketId || 'Open ticket'}
+                              <ExternalLink className="h-3 w-3 inline ml-0.5" />
+                            </a>
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── History Tab ── */}
+      {deckTab === 'history' && (
+        <div className="space-y-2">
+          <div className="border border-border rounded-lg overflow-hidden">
+            {[
+              {
+                label: 'Run created',
+                actor: run?.createdByName || run?.created_by_name || null,
+                time: run?.createdAt || run?.created_at,
+                icon: <FileText className="h-3 w-3" />,
+              },
+              {
+                label: 'Run started',
+                actor: run?.startedByName || null,
+                time: run?.startedAt || run?.started_at,
+                icon: <Play className="h-3 w-3" />,
+              },
+              {
+                label: 'Assigned',
+                actor: run?.assignedToName || null,
+                time: run?.assignedAt || run?.assigned_at,
+                icon: <User className="h-3 w-3" />,
+              },
+              {
+                label: 'Status changed',
+                actor: null,
+                time: run?.finishedAt || run?.finished_at,
+                icon: <Clock className="h-3 w-3" />,
+              },
+            ].filter(Boolean).map((event, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-3 border-b border-border/40 last:border-0 px-4 py-3"
+              >
+                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  {event.icon}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="font-medium text-foreground">{event.label}</span>
+                    {event.time && (
+                      <span className="text-muted-foreground font-mono leading-none">
+                        {new Date(event.time).toLocaleDateString('en-GB', {
+                          day: 'numeric', month: 'short', year: 'numeric',
+                          hour: '2-digit', minute: '2-digit',
+                        })}
+                      </span>
+                    )}
+                  </div>
+                  {event.actor && (
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      {event.actor}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Execution history reflects run lifecycle events captured from the run record.
+          </p>
+        </div>
+      )}
+
+      <DefectDetailModal
+        open={!!selectedDefect}
+        onOpenChange={(open) => !open && setSelectedDefect(null)}
+        defect={{
+          id: selectedDefect?.id ?? '',
+          title: selectedDefect?.title || '',
+          description: selectedDefect?.description ?? null,
+          severity: selectedDefect?.severity ?? '',
+          localStatus: selectedDefect?.localStatus,
+          ticketUrl: selectedDefect?.ticketUrl ?? null,
+          externalTicketId: selectedDefect?.externalTicketId ?? null,
+          raisedBy: selectedDefect?.raisedBy,
+          raisedByName: selectedDefect?.raisedByName ?? null,
+          raisedAt: selectedDefect?.raisedAt,
+        }}
+      />
 
     </div>
   );

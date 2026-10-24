@@ -1,6 +1,12 @@
 import vm from 'node:vm';
 import { decrypt } from '@/lib/crypto';
 import { validateDestinationUrl } from '@/lib/network/ssrf-guard';
+import {
+  composeDocument,
+  confluenceStorageToMarkdown,
+  notionBlocksToDocumentMarkdown,
+  type DocMarkdown,
+} from '@/lib/integrations/doc-markdown';
 
 export type ToolProviderId = 'confluence' | 'notion' | 'figma' | 'postman' | 'datadog';
 
@@ -110,12 +116,16 @@ export async function testConfluenceConnection(
     return { success: false, message: 'Confluence Base URL and API Token are required.' };
   }
 
-  const targetUrl = baseUrl.endsWith('/wiki')
+  const targetUrlPrimary = baseUrl.endsWith('/wiki')
     ? `${baseUrl}/rest/api/space?limit=3`
     : `${baseUrl}/wiki/rest/api/space?limit=3`;
+    
+  const targetUrlFallback = baseUrl.endsWith('/wiki')
+    ? baseUrl.replace(/\/wiki$/, '/rest/api/space?limit=3')
+    : `${baseUrl}/rest/api/space?limit=3`;
 
   try {
-    await validateDestinationUrl(targetUrl);
+    await validateDestinationUrl(targetUrlPrimary);
   } catch (urlErr: any) {
     return { success: false, message: urlErr?.message || 'Invalid Confluence URL' };
   }
@@ -124,8 +134,8 @@ export async function testConfluenceConnection(
     ? `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`
     : `Bearer ${token}`;
 
-  try {
-    const res = await fetch(targetUrl, {
+  const tryFetch = async (url: string) => {
+    return fetch(url, {
       method: 'GET',
       headers: {
         Authorization: authHeader,
@@ -133,6 +143,22 @@ export async function testConfluenceConnection(
       },
       signal: AbortSignal.timeout(10000),
     });
+  };
+
+  try {
+    let res = await tryFetch(targetUrlPrimary);
+    
+    // If we get a 404, the instance might not use the expected context path. Try the fallback.
+    if (res.status === 404) {
+      try {
+        const fallbackRes = await tryFetch(targetUrlFallback);
+        if (fallbackRes.ok || fallbackRes.status !== 404) {
+          res = fallbackRes;
+        }
+      } catch (fallbackErr) {
+        // Ignore fallback error and return primary error
+      }
+    }
 
     const latencyMs = Date.now() - start;
     if (!res.ok) {
@@ -3462,5 +3488,251 @@ export async function executeDatadogSyntheticsRun(
     steps,
     automationLog: logLines.join('\n'),
     externalUrl: primaryResultUrl,
+  };
+}
+
+function extractConfluencePageId(pageIdOrUrl: string): string {
+  const raw = (pageIdOrUrl || '').trim();
+  if (!raw) return '';
+
+  const queryMatch = raw.match(/[?&]pageId=(\d+)/i);
+  if (queryMatch) return queryMatch[1];
+
+  const pagesMatch = raw.match(/\/pages\/(\d+)(?:\/|[?#]|$)/i);
+  if (pagesMatch) return pagesMatch[1];
+
+  if (/^\d+$/.test(raw)) return raw;
+
+  const segments = raw.split(/[?#]/)[0].split('/').filter(Boolean);
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    if (/^\d+$/.test(segments[i])) return segments[i];
+  }
+
+  return raw;
+}
+
+function formatConfluenceTimestamp(value: string | undefined): string {
+  if (!value) return '';
+  return value.replace('T', ' ').replace(/\.\d+Z$/, ' UTC').replace(/Z$/, ' UTC');
+}
+
+/**
+ * Fetches a Confluence Cloud page and returns it as a clean markdown document.
+ *
+ * Storage-format HTML is converted through cheerio + turndown (GFM) so tables,
+ * nested lists, code blocks, links and Confluence macros survive the import.
+ */
+export async function fetchConfluencePageContent(
+  config: { baseUrl: string; email: string; apiToken: string },
+  pageIdOrUrl: string
+): Promise<DocMarkdown> {
+  const pageId = extractConfluencePageId(pageIdOrUrl);
+  if (!pageId) {
+    throw new Error('Could not determine the Confluence page id from the provided URL.');
+  }
+
+  const base = config.baseUrl.trim().replace(/\/+$/, '');
+  const auth = Buffer.from(`${config.email}:${config.apiToken}`).toString('base64');
+  const query = '?expand=body.storage,version,space';
+
+  const targetUrlPrimary = base.endsWith('/wiki')
+    ? `${base}/rest/api/content/${pageId}${query}`
+    : `${base}/wiki/rest/api/content/${pageId}${query}`;
+
+  const targetUrlFallback = base.endsWith('/wiki')
+    ? base.replace(/\/wiki$/, `/rest/api/content/${pageId}${query}`)
+    : `${base}/rest/api/content/${pageId}${query}`;
+
+  const tryFetch = (url: string) =>
+    fetch(url, {
+      headers: {
+        Authorization: `Basic ${auth}`,
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+
+  let response = await tryFetch(targetUrlPrimary);
+  if (response.status === 404) {
+    const fallback = await tryFetch(targetUrlFallback).catch(() => null);
+    if (fallback && (fallback.ok || fallback.status !== 404)) {
+      response = fallback;
+    }
+  }
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    const hint =
+      response.status === 404
+        ? 'Page not found. Check the page URL and that the API token can access the space.'
+        : response.statusText || 'Request failed';
+    throw new Error(
+      `Failed to fetch Confluence page: ${response.status} ${hint}${
+        detail ? ` (${detail.slice(0, 200)})` : ''
+      }`
+    );
+  }
+
+  const data = await response.json();
+  const storageHtml: string = data?.body?.storage?.value || '';
+  const body = confluenceStorageToMarkdown(storageHtml);
+
+  const baseLink = String(data?._links?.base || '').replace(/\/+$/, '');
+  const webLink = String(data?._links?.webui || '');
+  const sourceUrl = baseLink && webLink ? `${baseLink}${webLink}` : '';
+
+  const when = formatConfluenceTimestamp(data?.version?.when);
+  const author = String(data?.version?.by?.displayName || '').trim();
+  const lastUpdated = when && author ? `${when} by ${author}` : when || author;
+
+  const title = String(data?.title || '').trim() || 'Untitled Confluence page';
+
+  return {
+    title,
+    markdown: composeDocument({
+      title,
+      sourceUrl: sourceUrl || (/^https?:\/\//i.test(pageIdOrUrl) ? pageIdOrUrl.trim() : ''),
+      lastUpdated,
+      body,
+    }),
+  };
+}
+
+const NOTION_API_VERSION = '2022-06-28';
+
+function extractNotionPageId(pageIdOrUrl: string): string {
+  const raw = (pageIdOrUrl || '').trim();
+  if (!raw) return '';
+
+  const dashed = raw.match(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+  );
+  if (dashed) return dashed[0].replace(/-/g, '');
+
+  const compact = raw.match(/[0-9a-f]{32}/i);
+  if (compact) return compact[0];
+
+  const segments = raw.split(/[?#]/)[0].split('/').filter(Boolean);
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    const digits = segments[i].replace(/[^0-9a-f]/gi, '');
+    if (/^[0-9a-f]{32}$/i.test(digits)) return digits;
+  }
+
+  return raw;
+}
+
+async function notionRequest(path: string, token: string): Promise<any> {
+  const response = await fetch(`https://api.notion.com/v1${path}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Notion-Version': NOTION_API_VERSION,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    let detail = text.slice(0, 200);
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.message) detail = String(parsed.message);
+    } catch {
+      /* keep raw text */
+    }
+    throw new Error(
+      `Failed to fetch Notion page: ${response.status} ${response.statusText}${
+        detail ? ` (${detail})` : ''
+      }`
+    );
+  }
+
+  return response.json();
+}
+
+async function fetchNotionBlocks(
+  blockId: string,
+  token: string,
+  depth = 0
+): Promise<any[]> {
+  if (depth > 3) return [];
+
+  const blocks: any[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const params = new URLSearchParams({ page_size: '100' });
+    if (cursor) params.set('start_cursor', cursor);
+
+    const data = await notionRequest(
+      `/blocks/${blockId}/children?${params.toString()}`,
+      token
+    );
+
+    for (const block of data?.results || []) {
+      if (block?.has_children) {
+        try {
+          block._children = await fetchNotionBlocks(block.id, token, depth + 1);
+        } catch {
+          block._children = [];
+        }
+      }
+      blocks.push(block);
+    }
+
+    cursor = data?.has_more ? data.next_cursor : undefined;
+  } while (cursor);
+
+  return blocks;
+}
+
+function notionPageTitle(page: any): string {
+  const properties = page?.properties || {};
+  for (const key of Object.keys(properties)) {
+    const property = properties[key];
+    if (property?.type === 'title' && Array.isArray(property.title)) {
+      const text = property.title
+        .map((item: any) => item?.plain_text || '')
+        .join('')
+        .trim();
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+/**
+ * Fetches a Notion page (title + nested blocks) and returns it as markdown.
+ */
+export async function fetchNotionPageContent(
+  config: { apiToken: string },
+  pageIdOrUrl: string
+): Promise<DocMarkdown> {
+  const pageId = extractNotionPageId(pageIdOrUrl);
+  if (!pageId) {
+    throw new Error('Could not determine the Notion page id from the provided URL.');
+  }
+
+  const page = await notionRequest(`/pages/${pageId}`, config.apiToken);
+  const blocks = await fetchNotionBlocks(pageId, config.apiToken);
+
+  const title =
+    notionPageTitle(page) ||
+    (page?.url ? 'Notion page' : '') ||
+    'Untitled Notion page';
+
+  const edited = String(page?.last_edited_time || '').trim();
+  const lastUpdated = edited
+    ? `${edited.replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}`
+    : '';
+
+  return {
+    title,
+    markdown: composeDocument({
+      title,
+      sourceUrl: String(page?.url || (/^https?:\/\//i.test(pageIdOrUrl) ? pageIdOrUrl.trim() : '')),
+      lastUpdated,
+      body: notionBlocksToDocumentMarkdown(blocks),
+    }),
   };
 }

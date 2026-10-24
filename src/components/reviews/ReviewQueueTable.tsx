@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Tooltip } from '@/components/ui/tooltip';
 import { DataTable } from '@/components/common/DataTable';
+import { PageHeader } from '@/components/common/PageHeader';
 import { UserAvatar } from '@/components/common/UserAvatar';
 import { apiClient } from '@/lib/apiClient';
 import { logger } from '@/lib/logger.client';
@@ -607,7 +608,7 @@ export function ReviewQueueTable({ projectId, slug }: ReviewQueueTableProps) {
     {
       id: 'requester',
       header: 'Author',
-      className: 'w-[120px] text-left whitespace-nowrap px-4',
+      className: 'hidden lg:table-cell w-[120px] text-left whitespace-nowrap px-4',
       sortable: true,
       accessor: (row: any) => {
         const name = row.requesterName || 'Author';
@@ -647,7 +648,7 @@ export function ReviewQueueTable({ projectId, slug }: ReviewQueueTableProps) {
     {
       id: 'createdAt',
       header: 'Submitted',
-      className: 'w-[110px] text-left whitespace-nowrap px-4',
+      className: 'hidden xl:table-cell w-[110px] text-left whitespace-nowrap px-4',
       sortable: true,
       accessor: (row: any) => (
         <span className="text-[10.5px] xl:text-xs text-foreground font-semibold font-mono whitespace-nowrap">
@@ -754,26 +755,26 @@ export function ReviewQueueTable({ projectId, slug }: ReviewQueueTableProps) {
   return (
     <div className="flex flex-col h-full min-h-0 space-y-3.5">
       {/* ── Row 1: Title & Refresh ── */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Review Queue</h1>
-        </div>
-
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleManualRefresh}
-          disabled={loading || isRefreshing}
-          className="h-9 px-3.5 text-xs gap-1.5 rounded-xl border-border/70 hover:bg-muted cursor-pointer shrink-0"
-          title="Refresh review items"
-        >
-          <RefreshCw className={cn('h-3.5 w-3.5 text-muted-foreground', (loading || isRefreshing) && 'animate-spin text-primary')} />
-          <span>Refresh</span>
-        </Button>
-      </div>
+      <PageHeader
+        title="Review Queue"
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleManualRefresh}
+            disabled={loading || isRefreshing}
+            aria-label="Refresh review items"
+            className="h-9 px-3.5 text-xs gap-1.5 rounded-xl border-border/70 hover:bg-muted cursor-pointer shrink-0"
+            title="Refresh review items"
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5 text-muted-foreground', (loading || isRefreshing) && 'animate-spin text-primary')} />
+            <span>Refresh</span>
+          </Button>
+        }
+      />
 
       {/* Tabs below title */}
-      <div className="inline-flex items-center rounded-xl border border-border/60 bg-muted/20 p-1 text-xs font-medium">
+      <div className="inline-flex max-w-full items-center overflow-x-auto rounded-xl border border-border/60 bg-muted/20 p-1 text-xs font-medium scrollbar-none">
         <button
           type="button"
           onClick={() => {
@@ -781,7 +782,7 @@ export function ReviewQueueTable({ projectId, slug }: ReviewQueueTableProps) {
             setSelectedReviewIds(new Set());
           }}
           className={cn(
-            'px-3 py-1 rounded-lg transition-colors cursor-pointer',
+            'shrink-0 px-3 py-1 rounded-lg transition-colors cursor-pointer',
             currentFilter === 'needs_review'
               ? 'bg-primary/15 text-primary font-semibold shadow-xs'
               : 'text-muted-foreground hover:text-foreground'
@@ -796,7 +797,7 @@ export function ReviewQueueTable({ projectId, slug }: ReviewQueueTableProps) {
             setSelectedReviewIds(new Set());
           }}
           className={cn(
-            'px-3 py-1 rounded-lg transition-colors cursor-pointer',
+            'shrink-0 px-3 py-1 rounded-lg transition-colors cursor-pointer',
             currentFilter === 'my_requests'
               ? 'bg-primary/15 text-primary font-semibold shadow-xs'
               : 'text-muted-foreground hover:text-foreground'
@@ -809,7 +810,7 @@ export function ReviewQueueTable({ projectId, slug }: ReviewQueueTableProps) {
       {/* ── Row 2: Search, Filters & Bulk Actions ── */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 flex-1 min-w-[240px] max-w-2xl flex-wrap sm:flex-nowrap">
-          <div className="relative flex-1 min-w-[200px]">
+          <div className="relative min-w-0 flex-1 basis-[180px] sm:basis-auto">
             <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <Input
               type="text"

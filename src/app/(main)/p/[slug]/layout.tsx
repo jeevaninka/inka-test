@@ -5,6 +5,7 @@ import { ProjectDataProvider } from '@/components/providers/ProjectDataProvider'
 import { cookies } from 'next/headers';
 import { getCachedServerSession } from '@/lib/auth.config';
 import { getProjectBySlug, getProjects, getTestCases, getTestSuites, getTestRuns, getModules } from '@/lib/dal/projects';
+import { mapPrismaRunToMock, mapPrismaCaseToMock, mapPrismaModuleToMock } from '@/lib/dal/mappers';
 import { prisma } from '@/lib/db';
 import { logger } from '@/lib/logger';
 import type { Project } from '@/lib/types';
@@ -36,61 +37,7 @@ function mapPrismaProjectToMock(p: Record<string, unknown>): Project & Record<st
   };
 }
 
-function mapPrismaCaseToMock(c: any): any {
-  return {
-    id: c.id,
-    displayId: c.display_id,
-    projectId: c.project_id,
-    moduleId: c.module_id,
-    title: c.title,
-    description: c.description,
-    preConditions: c.pre_conditions,
-    postConditions: c.post_conditions,
-    steps: (c.test_case_steps || []).map((s: any) => ({
-      id: s.id,
-      order: s.order,
-      step: s.step,
-      expected_result: s.expected_result,
-      data: s.data,
-      reusableStepId: s.reusable_step_id,
-      reusable_step_id: s.reusable_step_id,
-      reusable_step_item_id: s.reusable_step_item_id,
-      reusable_step: s.reusable_step,
-      is_outdated: s.is_outdated,
-      image_url: s.image_url,
-    })),
-    expectedResult: c.expected_result,
-    priority: c.priority,
-    type: c.type.toLowerCase(),
-    status: c.status.toLowerCase(),
-    tags: c.tags,
-    labels: c.labels || [],
-    scenarioType: c.scenario_type,
-    customFields: c.custom_fields || {},
-    custom_fields: c.custom_fields || {},
-    aiGenerated: c.ai_generated,
-    needsUpdate: c.needs_update,
-    reviewStatus: c.review_status?.toLowerCase(),
-    createdBy: c.created_by,
-    createdAt: c.created_at.toISOString(),
-    updatedAt: c.updated_at?.toISOString?.() || c.created_at.toISOString(),
-    updatedBy: c.updated_by,
-    datasetId: c.dataset_id,
-    dataset: c.dataset,
-    localDataset: c.local_dataset,
-    local_dataset: c.local_dataset,
-  };
-}
 
-function mapPrismaModuleToMock(m: any): any {
-  return {
-    id: m.id,
-    projectId: m.project_id,
-    name: m.name,
-    parentId: m.parent_id,
-    orderIndex: m.order_index,
-  };
-}
 
 function mapPrismaSuiteToMock(s: any, casesMap?: Map<string, any>): any {
   return {
@@ -107,39 +54,6 @@ function mapPrismaSuiteToMock(s: any, casesMap?: Map<string, any>): any {
       test_case_id: sc.test_case_id,
       order_index: sc.order_index,
       assignee_id: sc.assignee_id,
-    })),
-  };
-}
-
-function mapPrismaRunToMock(r: any): any {
-  return {
-    id: r.id,
-    projectId: r.project_id,
-    suiteId: r.suite_id,
-    releaseId: r.release_id || null,
-    suiteName: r.suite?.name || null,
-    name: r.name,
-    environment: r.environment,
-    buildVersion: r.build_version,
-    assignedTo: r.assigned_to,
-    status: r.status.toLowerCase(),
-    source: r.source || 'manual',
-    startedAt: r.started_at?.toISOString(),
-    completedAt: r.completed_at?.toISOString(),
-    createdBy: r.created_by,
-    createdAt: r.created_at.toISOString(),
-    resolved_datasets: r.resolved_datasets,
-    resolved_variables: r.resolved_variables,
-    runContext: r.run_context || null,
-    run_context: r.run_context || null,
-    customFields: r.custom_fields || {},
-    custom_fields: r.custom_fields || {},
-    results: (r.results || []).map((res: any) => ({
-      ...res,
-      id: res.id,
-      testCaseId: res.test_case_id || res.testCaseId,
-      status: res.status ? String(res.status).toLowerCase() : 'pending',
-      timeSpentSeconds: res.time_spent_seconds ?? res.timeSpentSeconds ?? 0,
     })),
   };
 }

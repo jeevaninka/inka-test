@@ -129,7 +129,7 @@ export default function DeveloperSettingsPage() {
   };
 
   const handleRegenerateApiKey = async () => {
-    if (!confirm('Regenerating will invalidate the current key for automated pipelines. Continue?')) return;
+    if (!confirm('Existing pipelines will stop working. Continue?')) return;
     try {
       const { secret } = await regenerateApiSecretAction(projectIdOrSlug);
       setApiSecret(secret);
@@ -277,7 +277,7 @@ export default function DeveloperSettingsPage() {
                   ) : (
                     <RefreshCw className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />
                   )}
-                  <span>Test runner ping</span>
+                  <span>Send test request</span>
                 </Button>
               )}
             </div>
@@ -362,7 +362,7 @@ export default function DeveloperSettingsPage() {
                 </p>
                 <div className="p-3.5 rounded-xl border border-border/70 bg-background/80 font-mono text-[11.5px] text-muted-foreground overflow-x-auto space-y-1">
                   <p className="text-emerald-600 dark:text-emerald-400">
-                    curl -X PATCH &quot;https://your-domain.com/api/v1/runs/$RUN_ID/results&quot; \
+                    {`curl -X PATCH "https://${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3002'}/api/v1/runs/$RUN_ID/results" \\`}
                   </p>
                   <p className="pl-4 text-foreground/90">
                     -H &quot;X-Api-Key: {connectionsData?.cicd?.maskedKey || 'inka_live_••••••••••••2032'}&quot; \
@@ -414,11 +414,8 @@ export default function DeveloperSettingsPage() {
             </div>
 
             {webhooks.length === 0 ? (
-              <div className="p-8 text-center space-y-2 border border-dashed rounded-xl border-border/60 bg-muted/20">
-                <p className="font-semibold text-xs text-foreground">No project webhooks configured</p>
-                <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-                  Add endpoints to receive real-time webhook dispatches for test runs and defect creations.
-                </p>
+              <div className="p-4 text-center border border-dashed rounded-xl border-border/60 bg-muted/20">
+                <p className="text-xs text-muted-foreground">No project webhooks configured yet.</p>
               </div>
             ) : (
               <div className="divide-y divide-border/40 rounded-xl border border-border/60 bg-background/50 overflow-hidden text-xs">

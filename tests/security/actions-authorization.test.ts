@@ -92,7 +92,7 @@ describe('Server Actions Authorization Guardrail', () => {
 
     const destructiveScreens = [
       'src/app/(main)/p/[slug]/suites/page.tsx',
-      'src/app/(main)/p/[slug]/runs/page.tsx',
+      'src/app/(main)/p/[slug]/runs/RunsClient.tsx',
       'src/app/(main)/p/[slug]/repository/CaseDetailView.tsx',
     ];
     for (const screen of destructiveScreens) {

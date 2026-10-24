@@ -37,6 +37,8 @@ interface AutomationFilterProps {
   /** Restrict which modes are available to select. */
   allowedModes?: AutomationModeValue[];
   disabled?: boolean;
+  /** Remove the "All" mode chip (useful when none selected means all). */
+  hideAllChip?: boolean;
 }
 
 const MODE_OPTIONS: { value: AutomationModeValue; label: string; countKey: keyof AutomationFilterCounts }[] = [
@@ -65,6 +67,7 @@ export function AutomationFilter({
   lockMode = false,
   allowedModes,
   disabled = false,
+  hideAllChip = false,
 }: AutomationFilterProps) {
   const normalizedMode: AutomationModeValue = lockMode
     ? 'auto'
@@ -121,7 +124,7 @@ export function AutomationFilter({
             disabled && 'opacity-60'
           )}
         >
-          {MODE_OPTIONS.filter(o => !allowedModes || allowedModes.includes(o.value)).map((option) => {
+          {MODE_OPTIONS.filter(o => (!allowedModes || allowedModes.includes(o.value)) && !(hideAllChip && o.value === '')).map((option) => {
             const active = normalizedMode === option.value;
             const count = counts?.[option.countKey];
             return (
@@ -146,7 +149,7 @@ export function AutomationFilter({
                 {option.value === 'auto' && (
                   <ChevronDown
                     className={cn(
-                      'h-3 w-3 transition-transform duration-150',
+                      'h-3 w-3 ml-1 mr-0.5 transition-transform duration-150 shrink-0',
                       showSources && 'rotate-180',
                       active ? 'opacity-70' : 'opacity-50'
                     )}

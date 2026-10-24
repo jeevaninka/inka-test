@@ -722,3 +722,103 @@ html:not(.dark) .text-muted-foreground\/75 {
   color: hsl(var(--muted-foreground) / 0.9) !important;
 }
 
+/* ==========================================================================
+   TEST CASE DETAIL HEADER
+   Container-query driven so the sheet, pop-up and full-page variants adapt to
+   the width they are actually rendered at instead of the viewport.
+   ========================================================================== */
+
+.case-detail-header {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  width: 100%;
+}
+
+.case-detail-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.case-detail-header-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+/* Duplicated secondary/navigation actions live in the overflow menu only when
+   the header cannot show them inline. Hidden by default (wide headers). */
+.case-detail-overflow-secondary,
+.case-detail-overflow-nav,
+.case-detail-overflow-edit {
+  display: none;
+}
+
+/* View-only users have no case actions, so the overflow trigger only exists
+   for the secondary/navigation items that appear on narrow headers. */
+.case-detail-overflow[data-can-edit='false'] {
+  display: none;
+}
+
+/* Medium header: drop copy-link and view-mode buttons into the overflow menu. */
+@container (max-width: 767px) {
+  .case-detail-header-secondary {
+    display: none;
+  }
+
+  .case-detail-overflow-secondary {
+    display: flex;
+  }
+
+  .case-detail-overflow[data-can-edit='false'] {
+    display: block;
+  }
+}
+
+/* Narrow header: navigation moves into the overflow menu, metadata/counter
+   shrink so the case ID, title and close control keep their space. */
+@container (max-width: 639px) {
+  .case-detail-nav,
+  .case-detail-nav-counter,
+  .case-detail-viewonly,
+  .case-detail-edit-secondary {
+    display: none;
+  }
+
+  .case-detail-overflow-nav,
+  .case-detail-overflow-edit {
+    display: flex;
+  }
+}
+
+/* Only genuinely wide headers get the two-line clamp; everything narrower is
+   a single ellipsized line so the header never grows past its compact height. */
+@container (min-width: 1200px) {
+  .case-detail-title-clamp {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow: hidden;
+  }
+}
+
+/* The sheet caps at max-w-6xl, so its own container never reaches 1200px.
+   Wide desktop viewports may still use two lines, matching the previous
+   desktop presentation, while 1024-1439 stays on one line. */
+@media (min-width: 1440px) {
+  .case-detail-title-clamp {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow: hidden;
+  }
+}
+

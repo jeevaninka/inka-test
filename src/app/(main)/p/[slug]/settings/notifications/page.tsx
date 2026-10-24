@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useParams } from 'next/navigation';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Check, RotateCcw, Loader2, Save, RefreshCw } from 'lucide-react';
+import { Check, RotateCcw, Loader2, Save, RefreshCw, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   getProjectNotificationSettingsAction,
@@ -21,7 +21,6 @@ import { cn } from '@/lib/utils';
 
 type EventKey =
   | 'run_completed'
-  | 'case_assigned'
   | 'bug_raised'
   | 'release_approved'
   | 'review_requested'
@@ -33,7 +32,6 @@ type MatrixState = Record<EventKey, Record<ChannelKey, boolean>>;
 
 const RECOMMENDED_MATRIX: MatrixState = {
   run_completed: { slack: true, in_app: true, email: false },
-  case_assigned: { slack: true, in_app: true, email: true },
   bug_raised: { slack: true, in_app: true, email: false },
   release_approved: { slack: true, in_app: true, email: true },
   review_requested: { slack: false, in_app: true, email: true },
@@ -45,11 +43,6 @@ const EVENT_ROWS: Array<{ key: EventKey; label: string; description: string }> =
     key: 'run_completed',
     label: 'Run completed',
     description: 'A test run finishes',
-  },
-  {
-    key: 'case_assigned',
-    label: 'Case assigned',
-    description: 'A case is assigned to you',
   },
   {
     key: 'bug_raised',
@@ -73,6 +66,14 @@ const EVENT_ROWS: Array<{ key: EventKey; label: string; description: string }> =
   },
 ];
 
+const EVENT_GROUP_ORDER: Record<EventKey, string> = {
+  run_completed: 'Runs',
+  bug_raised: 'Bugs',
+  release_approved: 'Releases',
+  review_requested: 'Reviews',
+  sync_failed: 'Runs',
+};
+
 export default function NotificationsSettingsPage() {
   const params = useParams();
   const { slug } = params as Record<string, string>;
@@ -87,6 +88,8 @@ export default function NotificationsSettingsPage() {
   // Slack Channel Destination State
   const [connectionsData, setConnectionsData] = useState<any>(null);
   const [slackWebhook, setSlackWebhook] = useState('');
+  const [showSlackWebhook, setShowSlackWebhook] = useState(false);
+  const [slackDirty, setSlackDirty] = useState(false);
   const [testingSlack, setTestingSlack] = useState(false);
   const [savingSlack, setSavingSlack] = useState(false);
 
@@ -155,6 +158,7 @@ export default function NotificationsSettingsPage() {
       await updateProjectNotificationSettingsAction(projectIdOrSlug, {
         slack_webhook_url: slackWebhook.trim() || null,
       });
+      setSlackDirty(false);
       toast.success('Slack channel settings saved');
       const conn = await getProjectConnectionsAction(projectIdOrSlug).catch(() => null);
       setConnectionsData(conn);
@@ -171,6 +175,7 @@ export default function NotificationsSettingsPage() {
     try {
       await revertProjectSlackOverrideAction(projectIdOrSlug);
       setSlackWebhook('');
+      setSlackDirty(false);
       toast.success('Reverted to workspace Slack channel');
       const conn = await getProjectConnectionsAction(projectIdOrSlug).catch(() => null);
       setConnectionsData(conn);
@@ -183,31 +188,34 @@ export default function NotificationsSettingsPage() {
   };
 
   const toggleCell = (eventKey: EventKey, channelKey: ChannelKey) => {
-    setMatrix((prev) => {
-      const next = {
-        ...prev,
-        [eventKey]: {
-          ...prev[eventKey],
-          [channelKey]: !prev[eventKey][channelKey],
-        },
-      };
-      return next;
-    });
+    const next = {
+      ...matrix,
+      [eventKey]: { ...matrix[eventKey], [channelKey]: !matrix[eventKey][channelKey] },
+    };
+    setMatrix(next);
     setHasChanges(true);
+    void handleSave(next);
+  };
+
+  const toggleChannel = (channelKey: ChannelKey) => {
+    EVENT_ROWS.forEach(({ key }) => toggleCell(key, channelKey));
   };
 
   const handleResetToRecommended = () => {
     setMatrix(RECOMMENDED_MATRIX);
     setHasChanges(true);
+    void handleSave(RECOMMENDED_MATRIX);
     toast.info('Reset to recommended notification rules');
   };
 
-  const handleSave = async () => {
+  const handleSave = async (nextMatrix?: MatrixState) => {
+    const toSave = nextMatrix ?? matrix;
     setSaving(true);
     try {
       await updateProjectNotificationSettingsAction(projectIdOrSlug, {
-        custom_events_matrix: matrix,
+        custom_events_matrix: toSave,
       });
+      setMatrix(toSave);
       setHasChanges(false);
       toast.success('Notification settings saved');
     } catch (err: unknown) {
@@ -290,41 +298,54 @@ export default function NotificationsSettingsPage() {
                 Leave blank to automatically use the workspace default Slack channel.
               </p>
             </div>
-            {hasSlackOverride && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handleRevertSlack}
-                disabled={savingSlack}
-                className="h-8 px-2.5 text-xs rounded-lg text-muted-foreground hover:text-foreground cursor-pointer"
-              >
-                Revert to workspace channel
-              </Button>
-            )}
           </div>
 
-          <div className="flex gap-2.5 max-w-xl">
-            <Input
-              type="url"
-              placeholder={
-                connectionsData?.slack?.workspaceWebhookUrl
-                  ? 'Inheriting workspace default channel...'
-                  : 'https://hooks.slack.com/services/...'
-              }
-              value={slackWebhook}
-              onChange={(e) => setSlackWebhook(e.target.value)}
-              className="h-10 text-sm bg-background/80 rounded-lg"
-            />
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleSaveSlack}
-              disabled={savingSlack}
-              className="h-10 px-5 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs cursor-pointer shrink-0 rounded-lg"
-            >
-              {savingSlack ? 'Saving...' : 'Save channel'}
-            </Button>
+          <div className="space-y-2.5 max-w-xl">
+            <div className="flex items-center gap-2.5">
+              <Input
+                type={showSlackWebhook ? 'text' : 'password'}
+                placeholder={
+                  connectionsData?.slack?.workspaceWebhookUrl
+                    ? 'Inheriting workspace default channel...'
+                    : 'https://hooks.slack.com/services/...'
+                }
+                value={slackWebhook}
+                onChange={(e) => {
+                  setSlackWebhook(e.target.value);
+                  setSlackDirty(true);
+                }}
+                className="h-10 text-sm bg-background/80 rounded-lg"
+              />
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => setShowSlackWebhook(!showSlackWebhook)}
+                className="h-10 w-10 p-0 rounded-lg shrink-0 border border-border/80 bg-muted/40 hover:bg-muted"
+                aria-label={showSlackWebhook ? 'Hide Slack webhook URL' : 'Reveal Slack webhook URL'}
+              >
+                {showSlackWebhook ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSaveSlack}
+                disabled={savingSlack || !slackDirty}
+                className="h-10 px-5 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs cursor-pointer shrink-0 rounded-lg"
+              >
+                {savingSlack ? 'Saving...' : 'Save channel'}
+              </Button>
+            </div>
+
+            {hasSlackOverride && (
+              <button
+                type="button"
+                onClick={handleRevertSlack}
+                disabled={savingSlack}
+                className="text-xs font-medium text-primary hover:underline cursor-pointer disabled:opacity-50"
+              >
+                Revert to workspace channel
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -356,7 +377,7 @@ export default function NotificationsSettingsPage() {
               <Button
                 type="button"
                 size="sm"
-                onClick={handleSave}
+                onClick={() => void handleSave()}
                 disabled={saving}
                 className="h-8 px-4 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm"
               >
@@ -371,81 +392,135 @@ export default function NotificationsSettingsPage() {
       <div className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-card">
         {/* Table Header */}
         <div className="grid grid-cols-[1fr_80px_80px_80px] sm:grid-cols-[1fr_100px_100px_100px] items-center px-6 py-3.5 border-b border-border/50 bg-muted/40 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-          <div>EVENT</div>
-          <div className="text-center">SLACK</div>
-          <div className="text-center">IN-APP</div>
-          <div className="text-center">EMAIL</div>
+          <div className="pr-4">EVENT</div>
+          <div className="text-center">
+            {isSlackConnected ? (
+              <button
+                type="button"
+                onClick={() => toggleChannel('slack')}
+                className="cursor-pointer hover:underline text-foreground"
+              >
+                SLACK
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled
+                title="Slack is not connected"
+                className="text-muted-foreground/50 cursor-not-allowed"
+              >
+                SLACK
+              </button>
+            )}
+          </div>
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => toggleChannel('in_app')}
+              className="cursor-pointer hover:underline text-foreground"
+            >
+              IN-APP
+            </button>
+          </div>
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => toggleChannel('email')}
+              className="cursor-pointer hover:underline text-foreground"
+            >
+              EMAIL
+            </button>
+          </div>
         </div>
 
         {/* Table Rows */}
         <div className="divide-y divide-border/30">
-          {EVENT_ROWS.map(({ key, label, description }) => {
-            const rowState = matrix[key] || RECOMMENDED_MATRIX[key];
+          {(() => {
+            let lastGroup: string | null = null;
+            return EVENT_ROWS.map(({ key, label, description }) => {
+              const group = EVENT_GROUP_ORDER[key];
+              const rowState = matrix[key] || RECOMMENDED_MATRIX[key];
+              const showGroupHeader = group !== lastGroup;
+              lastGroup = group;
 
-            return (
-              <div
-                key={key}
-                className="grid grid-cols-[1fr_80px_80px_80px] sm:grid-cols-[1fr_100px_100px_100px] items-center px-6 py-4 hover:bg-muted/30 transition-colors"
-              >
-                {/* Event Title & Subtitle */}
-                <div className="pr-4">
-                  <span className="font-semibold text-sm text-foreground block">{label}</span>
-                  <span className="text-xs text-muted-foreground mt-0.5 block">{description}</span>
-                </div>
-
-                {/* Slack Checkbox */}
-                <div className="flex justify-center">
-                  <button
-                    type="button"
-                    onClick={() => toggleCell(key, 'slack')}
-                    aria-label={`${label} on Slack`}
-                    className={cn(
-                      'w-5 h-5 rounded-md flex items-center justify-center transition-all cursor-pointer',
-                      rowState.slack
-                        ? 'bg-emerald-500 text-black shadow-sm'
-                        : 'border border-border/60 hover:border-border/90 bg-transparent'
-                    )}
+              return (
+                <Fragment key={key}>
+                  {showGroupHeader && (
+                    <div
+                      className="grid grid-cols-[1fr_80px_80px_80px] sm:grid-cols-[1fr_100px_100px_100px] items-center px-6 py-2 bg-muted/50 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b border-border/40"
+                    >
+                      <div className="pr-4">{group}</div>
+                      <div className="text-center">ALL</div>
+                      <div className="text-center">ALL</div>
+                      <div className="text-center">ALL</div>
+                    </div>
+                  )}
+                  <div
+                    className="grid grid-cols-[1fr_80px_80px_80px] sm:grid-cols-[1fr_100px_100px_100px] items-center px-6 py-4 hover:bg-muted/30 transition-colors"
                   >
-                    {rowState.slack && <Check className="h-3.5 w-3.5 stroke-[3]" />}
-                  </button>
-                </div>
+                    {/* Event Title & Subtitle */}
+                    <div className="pr-4">
+                      <span className="font-semibold text-sm text-foreground block">{label}</span>
+                      <span className="text-xs text-muted-foreground mt-0.5 block">{description}</span>
+                    </div>
 
-                {/* In-App Checkbox */}
-                <div className="flex justify-center">
-                  <button
-                    type="button"
-                    onClick={() => toggleCell(key, 'in_app')}
-                    aria-label={`${label} In-App`}
-                    className={cn(
-                      'w-5 h-5 rounded-md flex items-center justify-center transition-all cursor-pointer',
-                      rowState.in_app
-                        ? 'bg-emerald-500 text-black shadow-sm'
-                        : 'border border-border/60 hover:border-border/90 bg-transparent'
-                    )}
-                  >
-                    {rowState.in_app && <Check className="h-3.5 w-3.5 stroke-[3]" />}
-                  </button>
-                </div>
+                    {/* Slack Checkbox */}
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleCell(key, 'slack')}
+                        disabled={!isSlackConnected}
+                        aria-label={`${label} on Slack`}
+                        title={!isSlackConnected ? 'Slack is not connected' : undefined}
+                        className={cn(
+                          'w-5 h-5 rounded-md flex items-center justify-center transition-all cursor-pointer',
+                          rowState.slack
+                            ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/40'
+                            : 'border border-border/60 hover:border-border/90 bg-transparent'
+                        )}
+                      >
+                        {rowState.slack && <Check className="h-3.5 w-3.5 stroke-[3] text-emerald-600" />}
+                      </button>
+                    </div>
 
-                {/* Email Checkbox */}
-                <div className="flex justify-center">
-                  <button
-                    type="button"
-                    onClick={() => toggleCell(key, 'email')}
-                    aria-label={`${label} via Email`}
-                    className={cn(
-                      'w-5 h-5 rounded-md flex items-center justify-center transition-all cursor-pointer',
-                      rowState.email
-                        ? 'bg-emerald-500 text-black shadow-sm'
-                        : 'border border-border/60 hover:border-border/90 bg-transparent'
-                    )}
-                  >
-                    {rowState.email && <Check className="h-3.5 w-3.5 stroke-[3]" />}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+                    {/* In-App Checkbox */}
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleCell(key, 'in_app')}
+                        aria-label={`${label} In-App`}
+                        className={cn(
+                          'w-5 h-5 rounded-md flex items-center justify-center transition-all cursor-pointer',
+                          rowState.in_app
+                            ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/40'
+                            : 'border border-border/60 hover:border-border/90 bg-transparent'
+                        )}
+                      >
+                        {rowState.in_app && <Check className="h-3.5 w-3.5 stroke-[3] text-emerald-600" />}
+                      </button>
+                    </div>
+
+                    {/* Email Checkbox */}
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleCell(key, 'email')}
+                        aria-label={`${label} via Email`}
+                        className={cn(
+                          'w-5 h-5 rounded-md flex items-center justify-center transition-all cursor-pointer',
+                          rowState.email
+                            ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/40'
+                            : 'border border-border/60 hover:border-border/90 bg-transparent'
+                        )}
+                      >
+                        {rowState.email && <Check className="h-3.5 w-3.5 stroke-[3] text-emerald-600" />}
+                      </button>
+                    </div>
+                  </div>
+                </Fragment>
+              );
+            });
+          })()}
         </div>
       </div>
     </div>
@@ -456,7 +531,7 @@ export default function NotificationsSettingsPage() {
           <span className="text-muted-foreground">You have unsaved changes to your notification matrix.</span>
           <Button
             size="sm"
-            onClick={handleSave}
+            onClick={() => void handleSave()}
             disabled={saving}
             className="h-8 px-4 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground"
           >

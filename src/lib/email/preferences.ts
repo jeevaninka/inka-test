@@ -2,9 +2,9 @@ import { prisma } from '@/lib/db';
 
 export async function shouldSendEmail(
   userId: number,
-  eventType: 'mention' | 'review_request' | 'run_complete' | 'invite' | 'case_assigned'
+  eventType: 'mention' | 'review_request' | 'run_complete' | 'invite'
 ): Promise<boolean> {
-  if (eventType === 'invite' || eventType === 'case_assigned') return true; // Default true
+  if (eventType === 'invite') return true; // Default true
 
   const prefs = await prisma.userNotificationPrefs.findUnique({
     where: { user_id: userId },

@@ -591,7 +591,6 @@ CREATE TABLE "UserNotificationPrefs" (
     "email_mentions" BOOLEAN NOT NULL DEFAULT true,
     "email_review_requests" BOOLEAN NOT NULL DEFAULT true,
     "email_run_complete" BOOLEAN NOT NULL DEFAULT true,
-    "slack_dm_webhook" TEXT,
     "digest_frequency" TEXT NOT NULL DEFAULT 'instant',
 
     CONSTRAINT "UserNotificationPrefs_pkey" PRIMARY KEY ("user_id")

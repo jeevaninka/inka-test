@@ -25,11 +25,19 @@ export async function POST(
   { params }: { params: Promise<{ workspaceSlug: string }> }
 ) {
   const startTime = Date.now();
+  const requestId = req.headers.get('x-request-id') || crypto.randomUUID();
   cleanIdempotencyCache();
 
   try {
     const { workspaceSlug } = await params;
     const rawBody = await req.text();
+
+    logger.debug('[Webhook] --> POST workspace incoming webhook', {
+      module: 'WebhooksIngress',
+      action: 'requestStart',
+      requestId,
+      workspaceSlug,
+    });
 
     // 1. Resolve Workspace
     const workspace = await prisma.workspace.findFirst({
@@ -42,7 +50,14 @@ export async function POST(
     });
 
     if (!workspace) {
-      return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
+      logger.warn('[Webhook] Workspace not found', {
+        module: 'WebhooksIngress',
+        action: 'resolveWorkspace',
+        requestId,
+        workspaceSlug,
+        status: 404,
+      });
+      return NextResponse.json({ error: 'Workspace not found' }, { status: 404, headers: { 'x-request-id': requestId } });
     }
 
     const integration = await prisma.integration.findFirst({
@@ -54,9 +69,17 @@ export async function POST(
     });
 
     if (!integration) {
+      logger.warn('[Webhook] PM tool integration not enabled', {
+        module: 'WebhooksIngress',
+        action: 'resolveIntegration',
+        requestId,
+        workspaceId: workspace.id,
+        workspaceSlug,
+        status: 404,
+      });
       return NextResponse.json(
         { error: 'PM tool integration is not enabled at the workspace level' },
-        { status: 404 }
+        { status: 404, headers: { 'x-request-id': requestId } }
       );
     }
 
@@ -256,6 +279,20 @@ export async function POST(
         },
       }).catch(() => null);
 
+      logger.info('[Webhook] Workspace webhook processed', {
+        module: 'WebhooksIngress',
+        action: 'processStatusUpdate',
+        requestId,
+        workspaceId: workspace.id,
+        workspaceSlug,
+        projectId: targetProjectId,
+        externalTicketId: String(ticketId),
+        ticketStatus,
+        localStatus: updateResult.localStatus,
+        matchedDefectsCount: updateResult.count,
+        durationMs: latencyMs,
+      });
+
       return NextResponse.json({
         success: true,
         workspaceId: workspace.id,
@@ -265,8 +302,20 @@ export async function POST(
         localStatus: updateResult.localStatus,
         matchedDefectsCount: updateResult.count,
         latencyMs,
-      });
+      }, { headers: { 'x-request-id': requestId } });
     }
+
+    logger.info('[Webhook] Workspace webhook processed (no matching defect)', {
+      module: 'WebhooksIngress',
+      action: 'processStatusUpdate',
+      requestId,
+      workspaceId: workspace.id,
+      workspaceSlug,
+      externalTicketId: String(ticketId),
+      ticketStatus,
+      matchedDefectsCount: 0,
+      durationMs: latencyMs,
+    });
 
     return NextResponse.json({
       success: true,
@@ -275,16 +324,17 @@ export async function POST(
       ticketStatus,
       matchedDefectsCount: 0,
       latencyMs,
-    });
+    }, { headers: { 'x-request-id': requestId } });
   } catch (err: any) {
     const normalized = normalizeError(err, ErrorCodes.INTERNAL, 'Internal server error processing webhook');
     logger.error('Workspace inbound webhook failed', {
       module: 'WebhooksIngress',
       action: 'handleWorkspaceWebhook',
+      requestId,
       durationMs: Date.now() - startTime,
       errorCode: normalized.code,
       error: err,
     });
-    return apiErrorResponse(normalized.message, normalized.status, normalized.code);
+    return apiErrorResponse(normalized.message, normalized.status, normalized.code, requestId);
   }
 }

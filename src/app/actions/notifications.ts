@@ -118,7 +118,6 @@ export async function updateNotificationPrefsAction(data: {
   email_mentions?: boolean;
   email_review_requests?: boolean;
   email_run_complete?: boolean;
-  slack_dm_webhook?: string | null;
 }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) throw new Error('Unauthorized');
@@ -131,33 +130,6 @@ export async function updateNotificationPrefsAction(data: {
   });
 
   revalidatePath('/profile');
-}
-
-export async function testSlackDmWebhookAction(webhookUrl: string) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) throw new Error('Unauthorized');
-  const userName = (session.user as any).name || 'Team Member';
-
-  if (!webhookUrl || !webhookUrl.trim()) {
-    throw new Error('Please enter a valid Slack webhook URL');
-  }
-
-  const result = await sendSlackWebhook(
-    webhookUrl.trim(),
-    {
-      text: `🔔 *InkaTest Slack DM Connected!* Hi ${userName}, your personal Slack direct alert channel is active. ✨`,
-    },
-    {
-      recipientType: 'dm',
-      eventType: 'SLACK_DM_TEST',
-    }
-  );
-
-  if (!result.success) {
-    throw new Error(result.error || 'Slack webhook request failed. Please check the URL.');
-  }
-
-  return { success: true };
 }
 
 export async function testProjectSlackWebhookAction(webhookUrl: string) {

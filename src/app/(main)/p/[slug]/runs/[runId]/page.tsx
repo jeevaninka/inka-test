@@ -1,9 +1,9 @@
 "use client";
 
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
-import { toast } from 'sonner';
 import { apiClient } from '@/lib/apiClient';
 import { Loader2 } from 'lucide-react';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -61,10 +61,6 @@ export default function RunExecutionPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [results, setResults] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [liveRun, setLiveRun] = useState<any>(null);
-
   const projectData = useProjectData();
   const project = projectData.project;
   const cases = projectData.cases || [];
@@ -74,51 +70,54 @@ export default function RunExecutionPage() {
   const runs = projectData.runs || [];
   const currentUser = projectData.currentUser;
   const contextRun = runs.find((r: any) => r.id === runId) as any;
-  const run = liveRun || contextRun;
 
-  // Newly created async external runs may not be in the project context yet.
-  // Fetch the run directly instead of spinning forever.
-  useEffect(() => {
-    if (contextRun || !runId) return;
-    let cancelled = false;
-    getTestRunByIdAction(runId)
-      .then((data) => {
-        if (!cancelled && data) setLiveRun(data);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [contextRun, runId]);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    apiClient.get<any[]>(`/api/v1/runs/${encodeURIComponent(runId)}/results`, undefined, { forceRefresh: true })
-      .then((data) => {
-        setResults(dedupeRunResults(data || []));
-        setLoading(false);
-      })
-      .catch((err) => {
-        toast.error(err.message || 'Failed to load results');
-        setLoading(false);
-      });
-  }, [runId]);
+  // Single source of truth for the run header: the project context snapshot is
+  // used instantly when present, otherwise one scoped fetch fills the gap.
+  const runQuery = useQuery({
+    queryKey: ['run', runId],
+    queryFn: () => getTestRunByIdAction(runId),
+    enabled: !!runId,
+    initialData: contextRun ?? undefined,
+    staleTime: 30_000,
+  });
+  const run = runQuery.data ?? contextRun;
+
+  // Results are the cockpit's hot data: one query key shared by the deck and
+  // the console so concurrent mounts dedupe into a single request.
+  const resultsQuery = useQuery({
+    queryKey: ['run-results', runId],
+    queryFn: async () => {
+      const data = await apiClient.get<any[]>(
+        `/api/v1/runs/${encodeURIComponent(runId)}/results`,
+        undefined,
+        { forceRefresh: true }
+      );
+      return dedupeRunResults(data || []);
+    },
+    enabled: !!runId,
+    staleTime: 30_000,
+  });
+  const results = useMemo(() => resultsQuery.data ?? [], [resultsQuery.data]);
+  const loading = resultsQuery.isLoading;
+
+  const setResults = useCallback(
+    (next: any[]) => queryClient.setQueryData(['run-results', runId], next),
+    [queryClient, runId]
+  );
 
   const getCase = useCallback((id: string) => cases.find((c: any) => c.id === id), [cases]);
 
   const refetchResults = useCallback(async () => {
     apiClient.invalidate(`/api/v1/runs/${encodeURIComponent(runId)}/results`);
-    const data = await apiClient.get<any[]>(
-      `/api/v1/runs/${encodeURIComponent(runId)}/results`,
-      undefined,
-      { forceRefresh: true }
-    );
-    if (data) setResults(dedupeRunResults(data));
-  }, [runId]);
+    const { data } = await resultsQuery.refetch();
+    if (data) setResults(data);
+  }, [resultsQuery, runId, setResults]);
 
   const refreshRun = useCallback(async () => {
-    const updated = await getTestRunByIdAction(runId);
-    if (updated) setLiveRun(updated);
-  }, [runId]);
+    await queryClient.invalidateQueries({ queryKey: ['run', runId] });
+  }, [queryClient, runId]);
 
   const isExternalRun =
     run?.source === 'postman' ||
@@ -144,8 +143,7 @@ export default function RunExecutionPage() {
       if (cancelled) return;
       try {
         await refetchResults();
-        const updated = await getTestRunByIdAction(runId);
-        if (!cancelled && updated) setLiveRun(updated);
+        await queryClient.invalidateQueries({ queryKey: ['run', runId] });
       } catch {
         // transient failures are expected; the next tick retries
       }
@@ -175,15 +173,11 @@ export default function RunExecutionPage() {
       source.close();
       if (fallback) clearInterval(fallback);
     };
-  }, [isExternalRun, hasLiveCases, refetchResults, runId]);
+  }, [isExternalRun, hasLiveCases, refetchResults, runId, queryClient]);
 
   useEffect(() => {
     if (!isExternalRun || hasLiveCases || results.length === 0) return;
-    getTestRunByIdAction(runId)
-      .then((updated) => {
-        if (updated) setLiveRun(updated);
-      })
-      .catch(() => {});
+    void queryClient.invalidateQueries({ queryKey: ['run', runId] });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExternalRun, hasLiveCases]);
 

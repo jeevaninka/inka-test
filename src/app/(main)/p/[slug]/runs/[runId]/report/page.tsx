@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { DataTable } from '@/components/common/DataTable';
 import { ResultStatusBadge } from '@/components/common/ResultStatusBadge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ExternalLink, RotateCcw, Loader2, Copy, Bug, Plus, Printer, Share2, Clock, CheckCircle2, AlertOctagon, MinusCircle, Ban, ArrowLeft, Globe, Database } from 'lucide-react';
+import { ExternalLink, RotateCcw, Loader2, Copy, Bug, Plus, Printer, Share2, Clock, CheckCircle2, AlertOctagon, MinusCircle, Ban, ArrowLeft, Globe, Database, TriangleAlert, User, FileText } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip } from 'recharts';
 import { getRunResultsAction } from '@/app/actions/runs';
 import { UserAvatar } from '@/components/common/UserAvatar';
@@ -87,6 +87,34 @@ export default function RunReportPage() {
     skip: results.filter((r) => r.status === 'skip').length,
     invalid: results.filter((r) => r.status === 'invalid').length,
   }), [results]);
+
+  // Bugs data - collect all defects from results
+  const allDefects = useMemo(() => {
+    const defects: any[] = [];
+    results.forEach((r) => {
+      if (r.defects && r.defects.length > 0) {
+        r.defects.forEach((d: any) => {
+          defects.push({
+            ...d,
+            linkedCase: getCase(r.testCaseId),
+            linkedResult: r,
+          });
+        });
+      }
+    });
+    return defects;
+  }, [results, allCases]);
+
+  const bugStats = useMemo(() => {
+    const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+    allDefects.forEach((d) => {
+      const sev = (d.severity || '').toUpperCase();
+      if (counts[sev as keyof typeof counts] !== undefined) {
+        counts[sev as keyof typeof counts]++;
+      }
+    });
+    return counts;
+  }, [allDefects]);
 
   const effectiveRunStatus = useMemo(() => {
     if (!run) return { label: 'In Progress', color: 'blue' };
@@ -459,6 +487,138 @@ export default function RunReportPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Bugs Section */}
+      <Card className="print:shadow-none print:border">
+        <CardHeader className="py-2.5 px-5 border-b">
+          <CardTitle className="text-sm font-bold flex items-center gap-2">
+            <TriangleAlert className="h-3.5 w-3.5 text-red-500" />
+            <span>Bugs ({allDefects.length})</span>
+            <div className="flex items-center gap-2 ml-auto">
+              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", bugStats.CRITICAL > 0 ? "bg-red-500/10 text-red-500 border-red-500/30 border" : "bg-muted text-muted-foreground border-border")}>
+                Critical: {bugStats.CRITICAL}
+              </span>
+              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", bugStats.HIGH > 0 ? "bg-orange-500/10 text-orange-500 border-orange-500/30 border" : "bg-muted text-muted-foreground border-border")}>
+                High: {bugStats.HIGH}
+              </span>
+              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", bugStats.MEDIUM > 0 ? "bg-amber-500/10 text-amber-500 border-amber-500/30 border" : "bg-muted text-muted-foreground border-border")}>
+                Medium: {bugStats.MEDIUM}
+              </span>
+              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", bugStats.LOW > 0 ? "bg-blue-500/10 text-blue-500 border-blue-500/30 border" : "bg-muted text-muted-foreground border-border")}>
+                Low: {bugStats.LOW}
+              </span>
+            </div>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {allDefects.length === 0 ? (
+            <div className="p-8 text-center">
+              <TriangleAlert className="h-12 w-12 mx-auto text-muted-foreground/30 mb-3" />
+              <p className="text-muted-foreground text-sm">No bugs logged</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: '0' }}>
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider print:break-inside-avoid">Key</th>
+                    <th className="px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider print:break-inside-avoid">Title</th>
+                    <th className="px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider print:break-inside-avoid">Severity</th>
+                    <th className="px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider print:break-inside-avoid">Status</th>
+                    <th className="px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider print:break-inside-avoid">Linked Case</th>
+                    <th className="px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider print:break-inside-avoid">Reporter</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allDefects.map((defect, index) => {
+                    const severity = (defect.severity || '').toUpperCase();
+                    const severityColors: Record<string, string> = {
+                      CRITICAL: 'bg-red-500/10 text-red-500 border-red-500/30',
+                      HIGH: 'bg-orange-500/10 text-orange-500 border-orange-500/30',
+                      MEDIUM: 'bg-amber-500/10 text-amber-500 border-amber-500/30',
+                      LOW: 'bg-blue-500/10 text-blue-500 border-blue-500/30',
+                    };
+                    const statusLower = (defect.ticketStatus || '').toLowerCase();
+                    const isResolved =
+                      statusLower.includes('done') ||
+                      statusLower.includes('resolved') ||
+                      statusLower.includes('closed') ||
+                      statusLower.includes('fixed');
+                    const isInProgress =
+                      statusLower.includes('progress') ||
+                      statusLower.includes('review') ||
+                      statusLower.includes('investigating');
+                    const reporter = defect.raisedBy ? getUser(defect.raisedBy) : null;
+                    const linkedCase = defect.linkedCase;
+                    return (
+                      <tr key={defect.id} className="border-b border-border/50 print:break-inside-avoid" style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+                        <td className="px-3 py-2 text-xs font-mono font-semibold text-foreground print:break-inside-avoid">
+                          {defect.externalTicketId ? (
+                            <a
+                              href={defect.ticketUrl || '#'}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="hover:underline flex items-center gap-1"
+                            >
+                              {defect.externalTicketId}
+                              {defect.ticketUrl && <ExternalLink className="h-3 w-3" />}
+                            </a>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-xs font-medium text-foreground max-w-[300px] truncate print:break-inside-avoid" title={defect.title}>{defect.title}</td>
+                        <td className="px-3 py-2 text-[10px] font-semibold px-2 py-0.5 rounded-full border shrink-0 whitespace-nowrap print:break-inside-avoid"
+                            style={{ backgroundColor: 'transparent' }}>
+                          <span className={cn("inline-flex items-center gap-1", severityColors[severity] || "bg-muted text-muted-foreground border-border")}>
+                            {severity || '—'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground print:break-inside-avoid">
+                          {defect.ticketStatus ? (
+                            <span className={cn(
+                              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0",
+                              isResolved
+                                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                                : isInProgress
+                                ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                                : "bg-red-500/10 text-red-400 border-red-500/30"
+                            )}>
+                              {defect.ticketStatus}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-xs print:break-inside-avoid">
+                          {linkedCase?.displayId ? (
+                            <Link
+                              href={`/p/${slug}/repository/${linkedCase.displayId}`}
+                              className="flex items-center gap-1 hover:text-primary transition-colors font-medium"
+                            >
+                              <span className="font-mono text-muted-foreground">{linkedCase.displayId}</span>
+                              <span className="truncate max-w-[200px]">{linkedCase.title}</span>
+                            </Link>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-xs print:break-inside-avoid">
+                          {reporter ? (
+                            <span className="font-medium text-foreground">{reporter.name}</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Run Environment & Variable Snapshot */}
       {run.resolved_variables && Object.keys(run.resolved_variables).length > 0 && (

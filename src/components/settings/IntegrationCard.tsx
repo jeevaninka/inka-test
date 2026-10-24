@@ -20,6 +20,7 @@ export interface IntegrationCardProps {
   statusSignal?: { text: string; isOk: boolean };
   onAction: () => void;
   disabled?: boolean;
+  order?: number;
 }
 
 /**
@@ -40,12 +41,16 @@ export function IntegrationCard({
   statusSignal,
   onAction,
   disabled = false,
+  order = 0,
 }: IntegrationCardProps) {
   const isConnected = status === 'connected';
   const isError = status === 'error';
 
   return (
-    <div className="rounded-xl border border-border/80 bg-card p-3.5 flex flex-col justify-between hover:border-primary/40 transition-all shadow-card h-full min-h-[146px]">
+    <div
+      className="rounded-xl border border-border/80 bg-card p-3.5 flex flex-col justify-between hover:border-primary/40 transition-all shadow-card h-full min-h-[146px]"
+      style={{ order }}
+    >
       <div className="space-y-2.5">
         {/* Top: Icon + Title + Status Badges */}
         <div className="flex items-start justify-between gap-2">
@@ -61,7 +66,7 @@ export function IntegrationCard({
             <div className="min-w-0">
               <h4 className="font-semibold text-xs sm:text-sm text-foreground truncate">{name}</h4>
               {category && (
-                <span className="text-[10px] font-mono text-muted-foreground block truncate">
+                <span className="text-[10px] font-mono text-muted-foreground block" title={category}>
                   {category}
                 </span>
               )}
@@ -103,7 +108,10 @@ export function IntegrationCard({
           </p>
 
           {(statusSignal || meta) && (
-            <div className="mt-1.5 text-[10.5px] font-mono text-muted-foreground flex items-center gap-1.5 truncate">
+            <div
+              className="mt-1.5 text-[10.5px] font-mono text-muted-foreground flex items-center gap-1.5 flex-wrap"
+              title={statusSignal ? statusSignal.text : meta}
+            >
               {statusSignal ? (
                 <>
                   <span
@@ -112,10 +120,10 @@ export function IntegrationCard({
                       statusSignal.isOk ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-red-500 dark:bg-red-400'
                     )}
                   />
-                  <span className="truncate">{statusSignal.text}</span>
+                  <span>{statusSignal.text}</span>
                 </>
               ) : (
-                <span className="truncate">{meta}</span>
+                <span>{meta}</span>
               )}
             </div>
           )}

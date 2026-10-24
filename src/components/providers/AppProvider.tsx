@@ -5,6 +5,8 @@ import { SessionProvider } from 'next-auth/react';
 import { MotionConfig } from 'framer-motion';
 import type { ReactNode } from 'react';
 import type { Session } from 'next-auth';
+import { ClientGlobalErrorHandler } from '@/lib/client-global-error';
+import { QueryProvider } from './QueryProvider';
 
 interface AppProviderProps {
   children: ReactNode;
@@ -40,9 +42,12 @@ export function AppProvider({ children, session }: AppProviderProps) {
 
   return (
     <SessionProvider session={session} refetchOnWindowFocus={false}>
-      <MotionConfig reducedMotion="user">
-        {children}
-      </MotionConfig>
+      <QueryProvider>
+        <MotionConfig reducedMotion="user">
+          <ClientGlobalErrorHandler />
+          {children}
+        </MotionConfig>
+      </QueryProvider>
     </SessionProvider>
   );
 }

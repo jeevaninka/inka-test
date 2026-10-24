@@ -1,8 +1,9 @@
 'use client';
 
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Plus, Search, Edit2, Trash2, Copy, GripVertical, X, Eye, Layers, ExternalLink, FileText, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -51,9 +52,36 @@ interface GroupStepItem {
 export function StepLibraryPage({ slug }: StepLibraryPageProps) {
   const { project, modules, cases: projectCases } = useProjectData();
   const router = useRouter();
-  const [steps, setSteps] = useState<any[]>([]);
+  const queryClient = useQueryClient();
+  const projectId = project?.id || slug;
+
+  const stepsQuery = useQuery({
+    queryKey: ['reusable-steps', projectId],
+    queryFn: () => getReusableStepsAction(projectId),
+    enabled: Boolean(projectId),
+    staleTime: 30_000,
+  });
+  const steps: any[] = useMemo(() => stepsQuery.data ?? [], [stepsQuery.data]);
+  const loading = stepsQuery.isLoading;
+
+  const variablesQuery = useQuery({
+    queryKey: ['global-variables', projectId],
+    queryFn: async () => {
+      const vars = await getGlobalVariablesAction(projectId);
+      return vars.map((v: any) => ({ key: v.key, scope: 'GLOBAL' as const }));
+    },
+    enabled: Boolean(project?.id),
+    staleTime: 30_000,
+  });
+  const variables = useMemo(() => variablesQuery.data ?? [], [variablesQuery.data]);
+
+  const invalidateSteps = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: ['reusable-steps', projectId] }),
+    [queryClient, projectId]
+  );
+  const loadSteps = invalidateSteps;
+
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
   const [editingStep, setEditingStep] = useState<any | null>(null);
   const [viewingStep, setViewingStep] = useState<any | null>(null);
@@ -63,7 +91,6 @@ export function StepLibraryPage({ slug }: StepLibraryPageProps) {
   const [viewModalTab, setViewModalTab] = useState<'steps' | 'usage'>('steps');
   const [formData, setFormData] = useState({ title: '', step: '', expectedResult: '', data: '', moduleId: '' });
   const [groupSteps, setGroupSteps] = useState<GroupStepItem[]>([]);
-  const [variables, setVariables] = useState<{ key: string; scope: 'GLOBAL' | 'LOCAL' }[]>([]);
   const [showLibraryModal, setShowLibraryModal] = useState(false);
   const [stepToDeleteObj, setStepToDeleteObj] = useState<any | null>(null);
   const [filterType, setFilterType] = useState<'all' | 'single' | 'group'>('all');
@@ -71,29 +98,6 @@ export function StepLibraryPage({ slug }: StepLibraryPageProps) {
   const [autocompleteIndex, setAutocompleteIndex] = useState<StepAutocompleteIndex | null>(() =>
     getCachedProjectAutocompleteIndex(project?.id || slug)
   );
-
-  const loadSteps = async () => {
-    try {
-      const projectId = project?.id || slug;
-      const data = await getReusableStepsAction(projectId);
-      setSteps(data);
-    } catch (e) {
-      toast.error('Failed to load steps');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadSteps();
-  }, [project?.id, slug]);
-
-  useEffect(() => {
-    if (!project?.id) return;
-    getGlobalVariablesAction(project.id).then((vars) => {
-      setVariables(vars.map((v: any) => ({ key: v.key, scope: 'GLOBAL' as const })));
-    }).catch(() => {});
-  }, [project?.id]);
 
   useEffect(() => {
     const projectId = project?.id || slug;

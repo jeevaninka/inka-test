@@ -318,9 +318,9 @@ export function DashboardClient({
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto w-full">
+    <div className="p-4 sm:p-6 space-y-4 xl:space-y-6 max-w-7xl mx-auto w-full min-w-0">
       {/* ── 1. Top Stat Cards Grid (Equal height on all 4 cards, arrow higher & righter) ── */}
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4 items-stretch">
+      <div className="grid gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4 xl:gap-5 items-stretch">
         {statCards.map((stat) => (
           <div
             key={stat.label}
@@ -441,9 +441,9 @@ export function DashboardClient({
       </div>
 
       {/* ── 3. Main Dashboard Layout: Left 2/3 and Right 1/3 ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 xl:gap-6 items-start min-w-0">
         {/* ── Left Column: ~2/3 (Active Release Carousel, Capped Needs Attention, Top Failing Cases) ── */}
-        <div className="lg:col-span-8 space-y-6">
+        <div className="min-w-0 xl:col-span-8 space-y-4 xl:space-y-6">
           {/* Active Release Card (with carousel support if multiple releases active) */}
           {currentRelease && (
             <div className="relative glass rounded-2xl p-5 border border-border/50 hover:border-primary/20 transition-all">
@@ -677,7 +677,7 @@ export function DashboardClient({
         </div>
 
         {/* ── Right Column: ~1/3 (My Queue & User Activities) ── */}
-        <div className="lg:col-span-4 space-y-6">
+        <div className="min-w-0 xl:col-span-4 space-y-4 xl:space-y-6">
           {/* My Queue (Personal tasks assigned to logged-in user) */}
           <div className="relative glass rounded-2xl p-5 border border-border/50 hover:border-primary/20 transition-all">
             <div className="flex items-center justify-between pb-3 border-b border-border/30">

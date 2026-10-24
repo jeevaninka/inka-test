@@ -1872,18 +1872,48 @@ export function CaseDetailView({
   const displayTitle =
     draftState.title !== undefined ? draftState.title : title || testCase.title || '';
 
+  const requestNavigatePrev = () => {
+    if (hasChanges) {
+      setConfirmConfig({
+        open: true,
+        title: 'Unsaved Changes',
+        description: 'You have unsaved changes. Discard them and open the previous test case?',
+        confirmLabel: 'Discard & Continue',
+        variant: 'destructive',
+        onConfirm: () => onNavigatePrev?.(),
+      });
+    } else {
+      onNavigatePrev?.();
+    }
+  };
+
+  const requestNavigateNext = () => {
+    if (hasChanges) {
+      setConfirmConfig({
+        open: true,
+        title: 'Unsaved Changes',
+        description: 'You have unsaved changes. Discard them and open the next test case?',
+        confirmLabel: 'Discard & Continue',
+        variant: 'destructive',
+        onConfirm: () => onNavigateNext?.(),
+      });
+    } else {
+      onNavigateNext?.();
+    }
+  };
+
   return (
     <div className="min-h-screen scroll-smooth" onMouseDown={handleContainerBackgroundClick}>
       {/* Top Bar Header - Permanent Key + Title + Window Navigation */}
       <div
         className={cn(
-          "sticky z-30 h-[56px] py-2 bg-card/95 backdrop-blur-md border-b border-border/60 flex items-center",
+          "sticky z-30 min-h-[56px] py-2 bg-card/95 backdrop-blur-md border-b border-border/60 flex items-center",
           isFullPage ? "top-14" : "top-0"
         )}
         style={{ willChange: 'transform' }}
       >
-        <div className="w-full flex items-center justify-between px-4 md:px-6 gap-3">
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+        <div className="case-detail-header px-4 md:px-6">
+          <div className="flex items-center gap-2.5 min-w-0">
             {isFullPage && (
               <button
                 type="button"
@@ -1898,9 +1928,10 @@ export function CaseDetailView({
             <span className="font-mono text-xs sm:text-sm font-bold px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary border border-primary/25 shrink-0 select-all">
               {testCase.displayId}
             </span>
+          </div>
 
-            <div className="flex-1 min-w-0">
-              {isEditing ? (
+          <div className="min-w-0">
+            {isEditing ? (
                 activeEditField === 'title' ? (
                   <div className="flex items-center gap-1.5 w-full animate-in fade-in-0 duration-150">
                     <input
@@ -1956,7 +1987,10 @@ export function CaseDetailView({
                     className="group cursor-pointer rounded-lg px-1.5 py-0.5 -mx-1.5 hover:bg-muted/40 transition-colors flex items-center gap-1.5 min-w-0"
                     title="Click to edit title"
                   >
-                    <h1 className="text-base sm:text-lg md:text-xl font-bold text-foreground leading-snug whitespace-normal break-words select-text">
+                    <h1
+                      className="case-detail-title case-detail-title-clamp flex-1 text-base sm:text-lg md:text-xl font-bold text-foreground leading-snug select-text"
+                      title={displayTitle}
+                    >
                       {displayTitle}
                     </h1>
                     <Pencil className="h-3.5 w-3.5 opacity-0 group-hover:opacity-70 transition-opacity shrink-0 text-muted-foreground" />
@@ -1964,23 +1998,22 @@ export function CaseDetailView({
                 )
               ) : (
                 <h1
-                  className="text-base sm:text-lg md:text-xl font-bold text-foreground leading-snug whitespace-normal break-words select-text"
+                  className="case-detail-title case-detail-title-clamp text-base sm:text-lg md:text-xl font-bold text-foreground leading-snug select-text"
                   title={displayTitle}
                 >
                   {displayTitle}
                 </h1>
               )}
-            </div>
           </div>
 
           {/* Window & Navigation Controls + Primary Editorial Actions */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="case-detail-header-actions">
             {(isEditing || hasChanges) ? (
               <>
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 text-xs font-semibold cursor-pointer"
+                  className="case-detail-edit-secondary h-8 text-xs font-semibold cursor-pointer"
                   onClick={handleCancel}
                   disabled={saving}
                 >
@@ -2047,14 +2080,14 @@ export function CaseDetailView({
                 )}
               </>
             ) : !canEdit ? (
-              <span className="inline-flex items-center gap-1.5 h-8 px-3 rounded-xl bg-muted/40 border border-border/50 text-xs font-medium text-muted-foreground select-none">
+              <span className="case-detail-viewonly inline-flex items-center gap-1.5 h-8 px-3 rounded-xl bg-muted/40 border border-border/50 text-xs font-medium text-muted-foreground select-none">
                 <Eye className="h-3.5 w-3.5" />
                 <span>View Only</span>
               </span>
             ) : null}
 
             {/* Animated Copy Link Button */}
-            <Tooltip content={copiedLink ? "Copied!" : "Copy link"} side="bottom">
+            <Tooltip content={copiedLink ? "Copied!" : "Copy link"} side="bottom" wrapperClassName="case-detail-header-secondary">
               <button
                 type="button"
                 onClick={handleCopyLink}
@@ -2070,24 +2103,11 @@ export function CaseDetailView({
 
             {/* Prev / Next controls for stepped master-detail browsing */}
             {(onNavigatePrev !== undefined || onNavigateNext !== undefined) && (
-              <div className="flex items-center gap-1 bg-muted/50 p-0.5 rounded-lg border border-border/60 text-xs mr-1">
+              <div className="case-detail-nav flex items-center gap-1 bg-muted/50 p-0.5 rounded-lg border border-border/60 text-xs mr-1">
                 <Tooltip content="Previous test case" side="bottom">
                   <button
                     type="button"
-                    onClick={() => {
-                      if (hasChanges) {
-                        setConfirmConfig({
-                          open: true,
-                          title: 'Unsaved Changes',
-                          description: 'You have unsaved changes. Discard them and open the previous test case?',
-                          confirmLabel: 'Discard & Continue',
-                          variant: 'destructive',
-                          onConfirm: () => onNavigatePrev?.(),
-                        });
-                      } else {
-                        onNavigatePrev?.();
-                      }
-                    }}
+                    onClick={requestNavigatePrev}
                     disabled={!onNavigatePrev}
                     className="p-1 rounded text-foreground/80 hover:text-foreground disabled:opacity-30 disabled:pointer-events-none hover:bg-muted transition-colors cursor-pointer"
                   >
@@ -2095,27 +2115,14 @@ export function CaseDetailView({
                   </button>
                 </Tooltip>
                 {currentIndex !== undefined && totalCount !== undefined && (
-                  <span className="font-mono text-[11px] text-foreground/80 px-1 select-none font-semibold">
+                  <span className="case-detail-nav-counter font-mono text-[11px] text-foreground/80 px-1 select-none font-semibold">
                     {currentIndex + 1} of {totalCount}
                   </span>
                 )}
                 <Tooltip content="Next test case" side="bottom">
                   <button
                     type="button"
-                    onClick={() => {
-                      if (hasChanges) {
-                        setConfirmConfig({
-                          open: true,
-                          title: 'Unsaved Changes',
-                          description: 'You have unsaved changes. Discard them and open the next test case?',
-                          confirmLabel: 'Discard & Continue',
-                          variant: 'destructive',
-                          onConfirm: () => onNavigateNext?.(),
-                        });
-                      } else {
-                        onNavigateNext?.();
-                      }
-                    }}
+                    onClick={requestNavigateNext}
                     disabled={!onNavigateNext}
                     className="p-1 rounded text-foreground/80 hover:text-foreground disabled:opacity-30 disabled:pointer-events-none hover:bg-muted transition-colors cursor-pointer"
                   >
@@ -2126,13 +2133,13 @@ export function CaseDetailView({
             )}
 
             {/* Case Actions Overflow Menu (Clone, Delete) */}
-            {canEdit && (
-              <div
-                className="relative"
-                ref={overflowRef}
-                onMouseEnter={() => setShowOverflow(true)}
-                onMouseLeave={() => setShowOverflow(false)}
-              >
+            <div
+              className="case-detail-overflow relative"
+              data-can-edit={canEdit ? 'true' : 'false'}
+              ref={overflowRef}
+              onMouseEnter={() => setShowOverflow(true)}
+              onMouseLeave={() => setShowOverflow(false)}
+            >
                 <button
                   onClick={() => setShowOverflow(!showOverflow)}
                   className="p-1.5 rounded-lg hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
@@ -2141,10 +2148,106 @@ export function CaseDetailView({
                   <MoreVertical className="h-4 w-4" />
                 </button>
                 {showOverflow && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowOverflow(false)} />
-                    <div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border rounded-xl shadow-xl py-1 min-w-[180px] overflow-hidden text-xs">
-                      {isPostmanCase && (
+                  <div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border rounded-xl shadow-xl py-1 min-w-[180px] overflow-hidden text-xs">
+                    {/* Secondary header actions live here when the header is too narrow */}
+                    <div className="case-detail-overflow-secondary flex-col">
+                      <button
+                        onClick={() => { handleCopyLink(); setShowOverflow(false); }}
+                        className="w-full text-left px-3 py-2 hover:bg-muted text-foreground font-medium transition-colors cursor-pointer flex items-center gap-2"
+                      >
+                        <LinkIcon className="h-3.5 w-3.5 text-primary" />
+                        <span>Copy link</span>
+                      </button>
+                      {isFullPage ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setShowOverflow(false);
+                              router.push(`/p/${slug}/repository?case=${testCase?.displayId || caseId}&view=sheet`);
+                            }}
+                            className="w-full text-left px-3 py-2 hover:bg-muted text-foreground font-medium transition-colors cursor-pointer flex items-center gap-2"
+                          >
+                            <PanelRight className="h-3.5 w-3.5 text-primary" />
+                            <span>Open in side drawer</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowOverflow(false);
+                              router.push(`/p/${slug}/repository?case=${testCase?.displayId || caseId}&view=popup`);
+                            }}
+                            className="w-full text-left px-3 py-2 hover:bg-muted text-foreground font-medium transition-colors cursor-pointer flex items-center gap-2"
+                          >
+                            <AppWindow className="h-3.5 w-3.5 text-primary" />
+                            <span>Open in centered pop-up</span>
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {onToggleViewMode && viewMode !== 'docked' && (
+                            <button
+                              onClick={() => { setShowOverflow(false); onToggleViewMode(); }}
+                              className="w-full text-left px-3 py-2 hover:bg-muted text-foreground font-medium transition-colors cursor-pointer flex items-center gap-2"
+                            >
+                              {viewMode === 'popup' ? (
+                                <PanelRight className="h-3.5 w-3.5 text-primary" />
+                              ) : (
+                                <AppWindow className="h-3.5 w-3.5 text-primary" />
+                              )}
+                              <span>{viewMode === 'popup' ? 'Switch to side drawer view' : 'Switch to centered pop-up modal view'}</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              setShowOverflow(false);
+                              router.push(`/p/${slug}/repository/${testCase?.displayId || testCase?.display_id || testCase?.id || resolvedCaseId}`);
+                            }}
+                            className="w-full text-left px-3 py-2 hover:bg-muted text-foreground font-medium transition-colors cursor-pointer flex items-center gap-2"
+                          >
+                            <Maximize2 className="h-3.5 w-3.5 text-primary" />
+                            <span>Open in full page view</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Navigation moves here only on the narrowest headers */}
+                    {(onNavigatePrev !== undefined || onNavigateNext !== undefined) && (
+                      <div className="case-detail-overflow-nav flex-col">
+                        <button
+                          disabled={!onNavigatePrev}
+                          onClick={() => { setShowOverflow(false); requestNavigatePrev(); }}
+                          className="w-full text-left px-3 py-2 hover:bg-muted text-foreground font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
+                        >
+                          <ChevronLeft className="h-3.5 w-3.5" />
+                          <span>Previous case</span>
+                        </button>
+                        <button
+                          disabled={!onNavigateNext}
+                          onClick={() => { setShowOverflow(false); requestNavigateNext(); }}
+                          className="w-full text-left px-3 py-2 hover:bg-muted text-foreground font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
+                        >
+                          <ChevronRight className="h-3.5 w-3.5" />
+                          <span>Next case</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {(isEditing || hasChanges) && (
+                      <div className="case-detail-overflow-edit flex-col">
+                        <button
+                          disabled={saving}
+                          onClick={() => { setShowOverflow(false); handleCancel(); }}
+                          className="w-full text-left px-3 py-2 hover:bg-muted text-foreground font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          <span>{hasChanges ? 'Discard changes' : 'Exit edit'}</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {canEdit && (
+                      <>
+                        {isPostmanCase && (
                         <button
                           onClick={() => {
                             setExternalRunnerProvider('postman');
@@ -2278,16 +2381,16 @@ export function CaseDetailView({
                       >
                         Delete Case
                       </button>
-                    </div>
-                  </>
+                      </>
+                    )}
+                  </div>
                 )}
-              </div>
-            )}
+            </div>
 
             {/* Drawer & Pop-up Modal View Mode Controls */}
             {isFullPage ? (
               <>
-                <Tooltip content="Open in side drawer" side="bottom">
+                <Tooltip content="Open in side drawer" side="bottom" wrapperClassName="case-detail-header-secondary">
                   <button
                     type="button"
                     onClick={() => router.push(`/p/${slug}/repository?case=${testCase?.displayId || caseId}&view=sheet`)}
@@ -2296,7 +2399,7 @@ export function CaseDetailView({
                     <PanelRight className="h-4 w-4" />
                   </button>
                 </Tooltip>
-                <Tooltip content="Open in centered pop-up modal" side="bottom">
+                <Tooltip content="Open in centered pop-up modal" side="bottom" wrapperClassName="case-detail-header-secondary">
                   <button
                     type="button"
                     onClick={() => router.push(`/p/${slug}/repository?case=${testCase?.displayId || caseId}&view=popup`)}
@@ -2309,7 +2412,7 @@ export function CaseDetailView({
             ) : (
               <>
                 {onToggleViewMode && viewMode !== 'docked' && (
-                  <Tooltip content={viewMode === 'popup' ? "Switch to side drawer view" : "Switch to centered pop-up modal view"} side="bottom">
+                  <Tooltip content={viewMode === 'popup' ? "Switch to side drawer view" : "Switch to centered pop-up modal view"} side="bottom" wrapperClassName="case-detail-header-secondary">
                     <button
                       type="button"
                       onClick={onToggleViewMode}
@@ -2323,7 +2426,7 @@ export function CaseDetailView({
                     </button>
                   </Tooltip>
                 )}
-                <Tooltip content="Open in full page view" side="bottom">
+                <Tooltip content="Open in full page view" side="bottom" wrapperClassName="case-detail-header-secondary">
                   <button
                     type="button"
                     onClick={() => router.push(`/p/${slug}/repository/${testCase?.displayId || testCase?.display_id || testCase?.id || resolvedCaseId}`)}
@@ -2339,6 +2442,7 @@ export function CaseDetailView({
               <button
                 onClick={handleRequestClose}
                 className="p-1.5 rounded-lg hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                aria-label={isFullPage ? "Back to Repository" : "Close case detail"}
                 title={isFullPage ? "Back to Repository" : "Close"}
               >
                 <X className="h-4 w-4" />
@@ -2551,9 +2655,10 @@ export function CaseDetailView({
             modules={[...(modules || []), ...extraModules]}
             value={getValue('moduleId') || testCase.moduleId || ''}
             allowNone
-            noneLabel="None"
+            noneLabel="Module: None"
+            labelPrefix="Module:"
             size="sm"
-            className="h-6 px-2.5 text-xs font-medium border border-border/50 bg-muted/40 shadow-none hover:bg-muted/70 hover:text-foreground hover:border-border"
+            className="inline-flex max-w-[220px] h-6 px-2.5 text-xs font-medium border border-border/50 bg-muted/40 shadow-none hover:bg-muted/70 hover:text-foreground hover:border-border"
             onInlineCreate={async (name) => {
               const created = await createModuleAction({ projectId: project.id, name });
               setExtraModules((prev) => [...prev, created]);

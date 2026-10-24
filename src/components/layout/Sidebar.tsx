@@ -255,23 +255,24 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
   if (collapsed) {
     const itemsToRender = isWorkspaceContext ? workspaceNavItems : navItems;
     return (
-      <div className="flex flex-col items-center gap-3 p-4">
+      <div className="flex flex-col items-center gap-2 p-2 pt-3">
         {itemsToRender.map((item, index) => {
           const Icon = item.icon;
           const isActive = currentPath === item.href || (item.href !== `/p/${slug}` && item.href !== `/workspace/${activeWorkspaceSlug}` && item.href !== `/workspace/${workspace?.slug}` && currentPath.startsWith(item.href));
           return (
-            <Tooltip key={item.href} content={item.label} side="right">
+            <Tooltip key={item.href} content={item.label} side="right" delay={0}>
               <button
                 onClick={() => router.push(item.href)}
                 className={cn(
-                  'flex h-11 w-11 items-center justify-center rounded-xl transition-all duration-300',
+                  'flex flex-col items-center justify-center gap-1 h-12 w-10 shrink-0 rounded-xl transition-all duration-200 cursor-pointer',
                   isActive
                     ? 'bg-gradient-active text-primary shadow-glow-sm'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground hover-lift'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
-                style={{ animationDelay: `${index * 50}ms` }}
+                style={{ animationDelay: `${index * 40}ms` }}
               >
-                <Icon className="h-4 w-4" />
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="text-[9px] font-semibold truncate leading-none text-center uppercase tracking-tighter">{item.label}</span>
               </button>
             </Tooltip>
           );
@@ -573,10 +574,11 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
 
           <button
             onClick={toggleCollapse}
-            className="hidden md:flex p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted/60 transition-colors"
+            className="hidden md:flex w-10 h-10 shrink-0 p-1 text-muted-foreground hover:text-foreground rounded-xl hover:bg-muted/60 transition-all cursor-pointer shadow-sm border border-transparent hover:border-border"
             title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+            aria-label={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
           >
-            {isCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            {isCollapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
           </button>
         </div>
 
