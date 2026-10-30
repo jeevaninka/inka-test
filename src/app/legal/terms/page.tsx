@@ -5,7 +5,7 @@ export const metadata = {
   description: 'The terms that govern your use of InkaTest.',
 };
 
-const LAST_UPDATED = 'October 23, 2026';
+const LAST_UPDATED = 'October 29, 2026';
 
 export default function TermsPage() {
   return (
@@ -15,25 +15,20 @@ export default function TermsPage() {
       <p className={styles.updated}>Last updated: {LAST_UPDATED}</p>
 
       <div className={styles.intro}>
-        These Terms of Service (&ldquo;Terms&rdquo;) govern your access to and use of InkaTest, a
-        test management platform provided by{' '}
-        <span className={styles.placeholder}>[Company legal name]</span>{' '}
-        (&ldquo;InkaTest&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;). By creating an account or using
-        the service you agree to these Terms. If you are accepting them on behalf of an organization,
-        you represent that you have authority to bind that organization.
+        These Terms of Service (&ldquo;Terms&rdquo;) govern your access to and use of InkaTest, an
+        internal test management platform operated by Karnodakshayi Insurance Pvt Ltd
+        (&ldquo;the Organisation&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;) for use by its
+        employees and authorised personnel. By accessing or using InkaTest, you agree to these
+        Terms.
       </div>
 
       <section className={styles.section}>
-        <h2>1. Accounts</h2>
+        <h2>1. Eligibility and accounts</h2>
         <p>
-          You must provide accurate account information and keep your credentials secure. You are
-          responsible for all activity that occurs under your account. Accounts may be created with
-          an email address and password or through a supported single sign-on provider.
-        </p>
-        <p>
-          You must verify your email address before accessing invitations or organization
-          workspaces. We may suspend accounts that remain unverified or that we reasonably believe
-          are being used fraudulently.
+          InkaTest is available only to authorised users of the Organisation. You must use your
+          official work credentials, keep them secure, and not share them with anyone. You are
+          responsible for activity carried out under your account. Access may be suspended or
+          removed if your account is inactive, compromised, or no longer authorised.
         </p>
       </section>
 
@@ -41,105 +36,86 @@ export default function TermsPage() {
         <h2>2. Acceptable use</h2>
         <p>You agree not to:</p>
         <ul>
-          <li>Use the service in violation of applicable law or the rights of others.</li>
-          <li>Attempt to gain unauthorized access to accounts, workspaces, or infrastructure.</li>
-          <li>Upload malicious code, interfere with the service, or probe its security without permission.</li>
-          <li>Resell, sublicense, or provide the service to third parties except as permitted in writing.</li>
+          <li>Use InkaTest in violation of applicable law or Organisation policies.</li>
+          <li>Attempt to gain unauthorised access to accounts, data, or infrastructure.</li>
+          <li>
+            Upload malicious code, interfere with the service, or probe its security without
+            written approval.
+          </li>
+          <li>
+            Share InkaTest data with unauthorised persons or use it for non-work purposes.
+          </li>
         </ul>
       </section>
 
       <section className={styles.section}>
-        <h2>3. Customer content</h2>
+        <h2>3. Organisation content</h2>
         <p>
-          You retain ownership of the test cases, results, attachments, and other content you submit
-          (&ldquo;Customer Content&rdquo;). You grant us a limited license to host, process, and
-          display Customer Content solely to provide and improve the service. You are responsible
-          for having the necessary rights to the content you upload.
+          Test cases, results, attachments, and other content submitted to InkaTest
+          (&ldquo;Content&rdquo;) belong to the Organisation. You must have the right to upload any
+          Content you submit and should not store sensitive personal, customer, or confidential data
+          unless approved by the Organisation&rsquo;s policies.
         </p>
       </section>
 
       <section className={styles.section}>
-        <h2>4. Intellectual property</h2>
+        <h2>4. Monitoring and data use</h2>
         <p>
-          The service, including its software, design, and documentation, is owned by InkaTest and
-          its licensors and is protected by intellectual property laws. These Terms do not grant you
-          any rights to our trademarks or branding.
+          Use of InkaTest may be logged and monitored for security, support, and auditing purposes,
+          in line with the Organisation&rsquo;s IT and privacy policies. Account and activity data
+          are handled as described in the Organisation&rsquo;s applicable privacy notices.
         </p>
       </section>
 
       <section className={styles.section}>
-        <h2>5. Subscriptions and payment</h2>
+        <h2>5. Availability and support</h2>
         <p>
-          Paid plans are billed according to the plan you select. Fees are non-refundable except
-          where required by law or expressly stated in an order form. We may change pricing with
-          reasonable advance notice; continued use after the change constitutes acceptance.
+          We aim to keep InkaTest available and secure but do not guarantee uninterrupted access.
+          The service may be changed, suspended, or discontinued for maintenance, upgrades, or
+          business reasons.
         </p>
       </section>
 
       <section className={styles.section}>
-        <h2>6. Availability and support</h2>
+        <h2>6. Disclaimer and liability</h2>
         <p>
-          We work to keep the service available and secure, but we do not guarantee uninterrupted
-          access. Scheduled maintenance, third-party outages, and events outside our reasonable
-          control may affect availability.
+          InkaTest is provided &ldquo;as is&rdquo; and &ldquo;as available&rdquo;. To the extent
+          permitted by law, the Organisation is not liable for indirect or consequential loss
+          arising from use of, or inability to use, the service.
         </p>
       </section>
 
       <section className={styles.section}>
-        <h2>7. Disclaimers</h2>
+        <h2>7. Suspension and termination</h2>
         <p>
-          The service is provided &ldquo;as is&rdquo; and &ldquo;as available&rdquo;. To the maximum
-          extent permitted by law, we disclaim all warranties, express or implied, including
-          merchantability, fitness for a particular purpose, and non-infringement.
+          Access may be suspended or ended at any time, including if you breach these Terms, leave
+          the Organisation, change roles, or if required for security or legal reasons.
         </p>
       </section>
 
       <section className={styles.section}>
-        <h2>8. Limitation of liability</h2>
+        <h2>8. Changes to these Terms</h2>
         <p>
-          To the maximum extent permitted by law, neither party will be liable for indirect,
-          incidental, special, consequential, or punitive damages, or for lost profits or revenues.
-          Our aggregate liability arising out of these Terms will not exceed the amounts paid by you
-          for the service in the twelve months preceding the claim.
+          We may update these Terms from time to time. Updates take effect when posted in the
+          product, and continued use means you accept the updated Terms.
         </p>
       </section>
 
       <section className={styles.section}>
-        <h2>9. Termination</h2>
+        <h2>9. Governing policies and law</h2>
         <p>
-          You may stop using the service at any time. We may suspend or terminate access if you
-          materially breach these Terms, if required by law, or if your account poses a security
-          risk. On termination, your right to use the service ends; sections that by their nature
-          should survive will survive.
+          These Terms operate alongside the Organisation&rsquo;s employment terms, IT
+          acceptable-use policy, and code of conduct. If there is a conflict, those policies
+          prevail. These Terms are governed by the laws applicable to the Organisation&rsquo;s
+          registered jurisdiction.
         </p>
       </section>
 
       <section className={styles.section}>
-        <h2>10. Changes to these Terms</h2>
+        <h2>10. Contact</h2>
         <p>
-          We may update these Terms from time to time. Material changes will be announced in the
-          product or by email before they take effect. Continued use of the service after the
-          effective date constitutes acceptance of the updated Terms.
-        </p>
-      </section>
-
-      <section className={styles.section}>
-        <h2>11. Governing law</h2>
-        <p>
-          These Terms are governed by the laws of{' '}
-          <span className={styles.placeholder}>[governing jurisdiction]</span>, without regard to
-          conflict-of-law rules. Courts located in{' '}
-          <span className={styles.placeholder}>[venue]</span> will have exclusive jurisdiction,
-          subject to any mandatory local law.
-        </p>
-      </section>
-
-      <section className={styles.section}>
-        <h2>12. Contact</h2>
-        <p>
-          Questions about these Terms? Contact us at{' '}
-          <span className={styles.placeholder}>[legal@your-domain]</span> or at{' '}
-          <span className={styles.placeholder}>[registered address]</span>.
+          For questions about these Terms, contact{' '}
+          <a href="mailto:tech@inkasure.com">tech@inkasure.com</a>.
         </p>
       </section>
     </>

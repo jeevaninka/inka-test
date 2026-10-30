@@ -41,14 +41,20 @@ const DialogContent = React.forwardRef<
     onClose?: () => void;
     hideClose?: boolean;
     overlayClassName?: string;
+    /**
+     * Below 640px render as a bottom sheet (full width, anchored to the bottom).
+     * Pass false for surfaces that already fill the viewport.
+     */
+    sheetOnMobile?: boolean;
   }
->(({ className, children, onClose, hideClose = false, overlayClassName, ...props }, ref) => (
+>(({ className, children, onClose, hideClose = false, overlayClassName, sheetOnMobile = true, ...props }, ref) => (
   <DialogPrimitive.Portal>
     <DialogOverlay className={overlayClassName} />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
         'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 bg-popover text-popover-foreground p-6 shadow-2xl rounded-2xl border border-border max-h-[85vh] overflow-y-auto will-change-[transform,opacity]',
+        sheetOnMobile && 'dialog-sheet-mobile',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',

@@ -31,6 +31,7 @@ import { bulkDeleteRunsAction, bulkFinishRunsAction, cloneTestRunAction, archive
 import { getProjectReleasesAction } from '@/app/actions/releases';
 import type { TestRun } from '@/lib/types';
 import type { FilterField } from '@/components/common/AdvancedFilters';
+import { navigateTo } from '@/lib/navigation';
 
 const CreateRunModal = dynamic(
   () => import('@/components/runs/CreateRunModal').then((m) => m.CreateRunModal),
@@ -854,7 +855,7 @@ export function RunsClient({ initialRuns, projectReleases: initialProjectRelease
               <Tooltip content="Open Execution Console" side="top">
                 <button
                   type="button"
-                  onClick={() => router.push(`/p/${slug}/runs/${row.id}`)}
+                  onClick={(e) => navigateTo(e, `/p/${slug}/runs/${row.id}`, router.push)}
                   className="w-8 h-8 rounded-lg border border-white/10 bg-white/5 hover:bg-emerald-500/10 hover:border-emerald-500/30 hover:text-emerald-400 text-slate-300 flex items-center justify-center transition-all cursor-pointer shadow-xs"
                 >
                   <ArrowRight className="h-4 w-4 stroke-[2.5]" />
@@ -864,7 +865,7 @@ export function RunsClient({ initialRuns, projectReleases: initialProjectRelease
               <Tooltip content="View Summary Report" side="top">
                 <button
                   type="button"
-                  onClick={() => router.push(`/p/${slug}/runs/${row.id}/report`)}
+                  onClick={(e) => navigateTo(e, `/p/${slug}/runs/${row.id}/report`, router.push)}
                   className="w-8 h-8 rounded-lg border border-white/10 bg-white/5 hover:bg-emerald-500/10 hover:border-emerald-500/30 hover:text-emerald-400 text-slate-300 flex items-center justify-center transition-all cursor-pointer shadow-xs"
                 >
                   <FileText className="h-4 w-4" />
@@ -1249,9 +1250,11 @@ export function RunsClient({ initialRuns, projectReleases: initialProjectRelease
             selectable={canEdit}
             selectedIds={selectedIds}
             onSelectionChange={setSelectedIds}
-            onRowClick={(row) =>
-              router.push(
-                canEdit ? `/p/${slug}/runs/${row.id}` : `/p/${slug}/runs/${row.id}/report`
+            onRowClick={(row, event) =>
+              navigateTo(
+                event,
+                canEdit ? `/p/${slug}/runs/${row.id}` : `/p/${slug}/runs/${row.id}/report`,
+                router.push
               )
             }
             getId={(row) => row.id}

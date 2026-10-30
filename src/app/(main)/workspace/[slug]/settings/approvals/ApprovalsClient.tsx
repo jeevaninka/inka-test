@@ -439,7 +439,7 @@ export function ApprovalsClient({
             <Button
               onClick={handleConfirmApprove}
               disabled={isSubmitting}
-              className="btn-glow"
+              className="gradient-btn text-white"
             >
               {isSubmitting ? 'Approving…' : 'Confirm & Grant Access'}
             </Button>

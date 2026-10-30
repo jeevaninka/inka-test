@@ -527,6 +527,15 @@ export async function startRunCases(input: {
   const queued = await queueCases(run, targets, generation);
 
   if (queued > 0) {
+    // The person who starts the cases takes ownership of the ones nobody is
+    // assigned to; an existing assignment is never overwritten.
+    await prisma.runResult
+      .updateMany({
+        where: { id: { in: targets }, run_id: runId, assigned_to: null },
+        data: { assigned_to: actorId },
+      })
+      .catch(() => {});
+
     await prisma.testRun.update({
       where: { id: runId },
       data: {
@@ -539,6 +548,29 @@ export async function startRunCases(input: {
       },
     });
     publishExecutionEvent(runId, { type: 'RUN', status: 'QUEUED', executionState: 'QUEUED' });
+
+    // One human-readable activity entry per actual start. The run name is not
+    // in the action text because the dashboard already appends the entity name.
+    const activityAction =
+      mode === 'start'
+        ? 'Started test run'
+        : mode === 'rerun-all'
+          ? 'Re-ran all cases'
+          : mode === 'rerun-failed'
+            ? 'Re-ran failed cases'
+            : 'Resumed run';
+    await prisma.activityLog
+      .create({
+        data: {
+          project_id: run.project_id,
+          user_id: actorId,
+          action: activityAction,
+          entity_type: 'test_run',
+          entity_id: runId,
+          metadata: { mode, queued } as any,
+        },
+      })
+      .catch(() => {});
   }
 
   const refreshed = await loadRun(runId);
@@ -1131,6 +1163,9 @@ export async function stopRun(input: {
     select: { id: true, status: true, name: true, project_id: true },
   });
   if (!run) throw new Error('Run not found');
+  if (run.status === 'COMPLETED' || run.status === 'FAILED') {
+    throw new Error('This run is already complete and cannot be stopped.');
+  }
 
   const abort = Boolean(input.abort);
   await prisma.testRun.update({

@@ -4,6 +4,7 @@ import { decryptToolConfig } from '@/lib/integrations/tool-config';
 import {
   fetchDatadogSyntheticExecutionState,
   fetchDatadogBatchSnapshot,
+  fetchDatadogTestConfigSummary,
   type DatadogBatchSnapshot,
   type DatadogIntegrationConfig,
   type ExternalStepExecutionItem,
@@ -82,6 +83,48 @@ export interface BuildExternalResultInput {
   expired?: boolean;
   /** Explicit diagnostic when the outcome is UNAVAILABLE. */
   unavailableReason?: string;
+}
+
+/**
+ * Provider batch states that will never produce a result id: the test was not
+ * executed (paused / CI-skip rule / batch concurrency / interruption).
+ * Without this, such an execution stays "pending" until the 30-minute expiry.
+ */
+const PROVIDER_NOT_EXECUTED_STATUSES = new Set(['skipped', 'missed', 'interrupted']);
+
+/** Batch entries for this run that the provider decided not to execute. */
+export function providerNotExecutedEntries(
+  snapshot: DatadogBatchSnapshot
+): Array<{ publicId: string; status: string }> {
+  const out: Array<{ publicId: string; status: string }> = [];
+  for (const result of snapshot.results || []) {
+    const status = String(result.status || '').toLowerCase();
+    if (!result.publicId || result.resultId) continue;
+    if (!PROVIDER_NOT_EXECUTED_STATUSES.has(status)) continue;
+    if (out.some((entry) => entry.publicId === result.publicId)) continue;
+    out.push({ publicId: result.publicId, status });
+  }
+  return out;
+}
+
+/** Human-readable explanation for a test Datadog refused to execute. */
+export function describeProviderNotExecuted(
+  status: string,
+  meta?: { paused?: boolean; ciExecutionRule?: string } | null
+): string {
+  if (String(status).toLowerCase() === 'missed') {
+    return 'Datadog did not run this test within its CI batch window (provider concurrency).';
+  }
+  if (String(status).toLowerCase() === 'interrupted') {
+    return 'Datadog interrupted this test before it produced a result.';
+  }
+  if (meta?.paused) {
+    return 'Datadog skipped this test because it is paused in Datadog.';
+  }
+  if (String(meta?.ciExecutionRule || '').toLowerCase() === 'skipped') {
+    return "Datadog skipped this test because its CI execution rule is 'skipped'.";
+  }
+  return 'Datadog skipped this test without starting an execution.';
 }
 
 /**
@@ -182,6 +225,11 @@ export function buildExternalResultFromExecutions(
   } else if (overallStatus === 'UNAVAILABLE') {
     summary = `Datadog Synthetics: result unavailable — ${
       input.unavailableReason || 'no terminal result was returned before monitoring expiry'
+    }`;
+  } else if (overallStatus === 'SKIP') {
+    summary = `Datadog Synthetics: not executed — ${
+      executions.find((e) => e.failureMessage)?.failureMessage ||
+      'the provider did not run this test'
     }`;
   } else {
     summary = `Datadog Synthetics: ${passCount} passed, ${failCount} failed (${totalDurationMs}ms)`;
@@ -341,10 +389,39 @@ async function pollMonitor(claimed: ClaimedMonitor): Promise<string | null> {
         claimed.batch_id
       ).catch(() => null);
       if (snapshot) {
+        // Tests the provider decided not to execute never get a result id; they
+        // must settle now instead of waiting for the 30-minute expiry.
+        const notExecuted = providerNotExecutedEntries(snapshot).filter((entry) =>
+          missingResultIds.some((e) => e.publicId === entry.publicId)
+        );
+        const skipNotes = new Map<string, string>();
+        await Promise.all(
+          notExecuted.map(async (entry) => {
+            const meta =
+              entry.status === 'skipped'
+                ? await fetchDatadogTestConfigSummary(config, entry.publicId).catch(() => null)
+                : null;
+            skipNotes.set(entry.publicId, describeProviderNotExecuted(entry.status, meta));
+          })
+        );
+
         executions = executions.map((e) => {
           if (e.resultId) return e;
           const match = snapshot.results.find((r) => r.publicId === e.publicId && r.resultId);
-          return match ? { ...e, resultId: match.resultId, testType: e.testType || match.testType } : e;
+          if (match) {
+            return { ...e, resultId: match.resultId, testType: e.testType || match.testType };
+          }
+          const note = skipNotes.get(e.publicId);
+          if (note) {
+            return {
+              ...e,
+              status: 'skip',
+              durationMs: 0,
+              failureMessage: note,
+              finishedAt: new Date().toISOString(),
+            };
+          }
+          return e;
         });
       }
     }

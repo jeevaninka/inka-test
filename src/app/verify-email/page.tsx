@@ -1,9 +1,10 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import { getServerSession } from 'next-auth';
 import { prisma } from '@/lib/db';
 import { authOptions } from '@/lib/auth.config';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, AlertCircle, Zap } from 'lucide-react';
+import { CheckCircle2, AlertCircle } from 'lucide-react';
 import styles from '../(auth)/auth-pages.module.css';
 
 export const dynamic = 'force-dynamic';
@@ -52,7 +53,7 @@ export default async function VerifyEmailPage({
 
       <section className={styles.card} style={{ textAlign: 'center' }}>
         <div className={styles.brand}>
-          <span className={styles.logo}><Zap size={18} strokeWidth={2.2} /></span>
+          <span className={styles.logo}><Image src="/logo.svg" alt="InkaTest" width={18} height={18} /></span>
           <span>Inka<span className={styles.brandAccent}>Test</span></span>
         </div>
 

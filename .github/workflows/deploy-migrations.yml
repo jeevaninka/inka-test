@@ -33,23 +33,24 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: '.nvmrc'
           cache: 'pnpm'
 
       - name: Install dependencies
         run: |
           corepack enable
+          corepack install
           pnpm install --frozen-lockfile
 
       - name: Generate Prisma client
-        run: npx prisma generate
+        run: pnpm exec prisma generate
 
       - name: Apply pending migrations
         env:
           DATABASE_URL: ${{ secrets.DIRECT_URL }}
-        run: npx prisma migrate deploy
+        run: pnpm exec prisma migrate deploy
 
       - name: Verify migration status
         env:
           DATABASE_URL: ${{ secrets.DIRECT_URL }}
-        run: npx prisma migrate status
+        run: pnpm exec prisma migrate status

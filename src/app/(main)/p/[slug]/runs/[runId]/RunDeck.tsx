@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -25,7 +25,7 @@ import {
   Copy, RotateCcw, ExternalLink, MoreVertical, MoreHorizontal, Trash2, Plus,
   X, User, Download, Share2, Clock, ArrowUpDown, ArrowUp, ArrowDown, Play,
   Check, Sparkles, ListChecks, Layers, Edit, RefreshCw, Loader2, Pause, Filter,
-  Bug, History, FileText
+  Bug, History, FileText, GripVertical, MessageSquare
 } from 'lucide-react';
 import {
   finishRunAction,
@@ -33,12 +33,22 @@ import {
   deleteRunResultAction, bulkUpdateRunResultStatusAction,
   bulkSetRunResultStatusAction, bulkRerunRunResultsAction, bulkDeleteRunResultsAction,
   cloneTestRunAction, abortRunAction, updateTestRunAction, addCasesToRunAction,
-  resetSingleResultAction, archiveTestRunAction
+  resetSingleResultAction, archiveTestRunAction,
+  getProjectExecutionSettingsAction, reorderRunCasesAction
 } from '@/app/actions/runs';
 import { startExternalRunCasesAction, stopRunExecutionAction, rerunRunCasesAction, resumeExternalRunCasesAction } from '@/app/actions/integrations';
 import { Tooltip } from '@/components/ui/tooltip';
 import { getRunDefectsAction, type ProjectDefectItem } from '@/app/actions/defects';
+import {
+  readRunEnvironmentDetails,
+  summarizeRunEnvironment,
+  normalizeRunEnvironmentDetails,
+  type RunEnvironmentDetails,
+} from '@/lib/runs/environment';
 import { DefectDetailModal } from '@/components/runs/DefectDetailModal';
+import { EnvironmentDetailsFields } from '@/components/runs/EnvironmentDetailsFields';
+import { RunCommentsDialog } from '@/components/runs/RunCommentsDialog';
+import { navigateTo, type ModifierClickLike } from '@/lib/navigation';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter
 } from '@/components/ui/dialog';
@@ -153,6 +163,13 @@ function getCaseRunState(result: any): CaseRunState {
 }
 
 function deriveRunState(run: any, results: any[]): DerivedRunState {
+  const states = results.map(getCaseRunState);
+
+  // Live case state always wins over any textual marker: a case that is still
+  // running or queued means the run is in progress, whatever a settled note
+  // says. Otherwise the header could offer "Start" for a run that is running.
+  if (states.some((s) => s === 'RUNNING' || s === 'QUEUED')) return 'IN_PROGRESS';
+
   if (String(run?.status || '').toLowerCase() === 'aborted') return 'STOPPED';
   if (
     results.some((r) =>
@@ -162,8 +179,6 @@ function deriveRunState(run: any, results: any[]): DerivedRunState {
     return 'STOPPED';
   }
 
-  const states = results.map(getCaseRunState);
-  if (states.some((s) => s === 'RUNNING' || s === 'QUEUED')) return 'IN_PROGRESS';
   if (states.length === 0) return 'NOT_STARTED';
 
   const hasFinished = states.some(
@@ -178,30 +193,98 @@ function deriveRunState(run: any, results: any[]): DerivedRunState {
 function CaseStateBadge({
   state,
   queuePosition,
+  waiting = false,
+  etaSeconds = null,
 }: {
   state: CaseRunState;
   queuePosition?: number | null;
+  /** Provider-owned execution: started, but the result is not in yet. */
+  waiting?: boolean;
+  /** Suggested seconds until a queued case gets a slot; ticks down locally. */
+  etaSeconds?: number | null;
 }) {
   const meta = CASE_STATE_META[state];
+  const label =
+    state === 'QUEUED' && queuePosition
+      ? `Queued #${queuePosition}`
+      : waiting
+      ? 'Waiting'
+      : meta.label;
   return (
-    <StatusPill
-      tone={CASE_STATE_TONE[state]}
-      title={queuePosition ? `Queue position ${queuePosition}` : undefined}
-      icon={
-        state === 'RUNNING' ? (
-          <i className="running-dot" />
-        ) : (
-          <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
-        )
-      }
-    >
-      {state === 'QUEUED' && queuePosition ? `Queued #${queuePosition}` : meta.label}
-    </StatusPill>
+    <span className="inline-flex items-center gap-1.5 min-w-0">
+      <StatusPill
+        tone={waiting ? 'queued' : CASE_STATE_TONE[state]}
+        title={
+          queuePosition
+            ? `Queue position ${queuePosition}`
+            : waiting
+            ? 'Execution accepted by the provider; waiting for its result'
+            : undefined
+        }
+        icon={
+          state === 'RUNNING' ? (
+            <i className="running-dot" />
+          ) : (
+            <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+          )
+        }
+      >
+        {label}
+      </StatusPill>
+      {state === 'QUEUED' && etaSeconds != null && <QueueEta seconds={etaSeconds} />}
+    </span>
   );
 }
 
-const FRUITION_DONE = new Set([
-  'pass',
+/** Countdown for a queued case. Ticks locally from a server-anchored estimate. */
+function QueueEta({ seconds }: { seconds: number }) {
+  const anchor = useRef({ seconds, at: Date.now() });
+  if (anchor.current.seconds !== seconds) {
+    anchor.current = { seconds, at: Date.now() };
+  }
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (seconds <= 0) return;
+    const id = window.setInterval(() => tick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [seconds]);
+  const elapsed = Math.floor((Date.now() - anchor.current.at) / 1000);
+  const remaining = Math.max(0, anchor.current.seconds - elapsed);
+  return (
+    <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+      {remaining > 0 ? `starts in ${remaining}s` : 'starting'}
+    </span>
+  );
+}
+
+
+/**
+ * Live timer for the run deck: anchored to the server-reported elapsed seconds
+ * and ticking locally between server updates. Stops as soon as the case settles.
+ */
+function LiveTime({ result }: { result: any }) {
+  const base = Number(result?.timeSpentSeconds || 0);
+  const isRunning =
+    String(result?.status || '').toLowerCase() === 'pending' &&
+    (Boolean(result?.startedAt) ||
+      String(result?.caseState || '').toUpperCase() === 'RUNNING');
+  const anchor = useRef({ base, at: Date.now() });
+  if (anchor.current.base !== base) {
+    anchor.current = { base, at: Date.now() };
+  }
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = window.setInterval(() => tick((v) => v + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [isRunning]);
+  const seconds = isRunning
+    ? anchor.current.base + Math.floor((Date.now() - anchor.current.at) / 1000)
+    : base;
+  return <>{formatDuration(Math.max(0, seconds))}</>;
+}
+
+const FRUITION_DONE = new Set([  'pass',
   'fail',
   'error',
   'blocked',
@@ -241,11 +324,15 @@ const PRIORITY_CAPTION: Record<string, string> = {
 const RUN_STATUS_FILTER_OPTIONS: { value: string; label: string; dot: string; always?: boolean }[] = [
   { value: 'fail', label: 'Failed', dot: 'bg-rose-400', always: true },
   { value: 'blocked', label: 'Blocked', dot: 'bg-amber-400' },
-  { value: 'invalid', label: 'Invalid', dot: 'bg-violet-400' },
-  { value: 'error', label: 'Script error', dot: 'bg-orange-400' },
-  { value: 'skip', label: 'Skipped', dot: 'bg-zinc-400' },
-  { value: 'pending', label: 'Not run', dot: 'bg-muted-foreground/40' },
+  { value: 'error', label: 'Error', dot: 'bg-orange-400' },
   { value: 'pass', label: 'Passed', dot: 'bg-emerald-400', always: true },
+  { value: 'waiting', label: 'Waiting', dot: 'bg-sky-400' },
+  { value: 'queued', label: 'Queued', dot: 'bg-indigo-400' },
+  { value: 'running', label: 'Running', dot: 'bg-primary' },
+  { value: 'pending', label: 'Not run', dot: 'bg-muted-foreground/40' },
+  { value: 'skip', label: 'Skipped', dot: 'bg-zinc-400' },
+  { value: 'invalid', label: 'Invalid', dot: 'bg-violet-400' },
+  { value: 'cancelled', label: 'Cancelled', dot: 'bg-rose-300' },
 ];
 
 function FilterSection({
@@ -437,7 +524,7 @@ export interface RunDeckProps {
 
 export function RunDeck(props: RunDeckProps) {
   const {
-    slug, runId, run, results, refetchResults,
+    slug, runId, run, results, refetchResults, onResultsChange,
     getCase, progress, currentUser, members, suites, cases, modules, runs,
     onRunUpdated
   } = props;
@@ -445,25 +532,53 @@ export function RunDeck(props: RunDeckProps) {
   const router = useRouter();
   const { setRuns } = useProjectData();
 
+  /**
+   * A run keeps its own copy of each case. When the repository row is gone
+   * (deleted) or filtered out, fall back to the snapshot so the run still shows
+   * what was executed instead of silently dropping the row.
+   */
+  const getCaseOrSnapshot = useCallback(
+    (result: any) => {
+      const live = getCase(result?.testCaseId);
+      if (live) return live;
+      const s = result?.caseSnapshot;
+      if (!s) return undefined;
+      return {
+        id: s.id,
+        displayId: s.displayId,
+        display_id: s.displayId,
+        title: s.title,
+        priority: s.priority,
+        type: s.type,
+        status: s.status,
+        moduleId: s.moduleId,
+        tags: s.tags || [],
+        labels: s.labels || [],
+        custom_fields: s.customFields || {},
+        customFields: s.customFields || {},
+        isDeletedSnapshot: Boolean(s.deletedAt),
+        isArchivedSnapshot: String(s.status || '').toLowerCase() === 'archived',
+      } as any;
+    },
+    [getCase]
+  );
+
   const [search, setSearch] = useState('');
-  const [statusFilters, setStatusFilters] = useState<string[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [statusFilters, setStatusFilters] = useState<string[]>([]);  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [actionCase, setActionCase] = useState<any>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [showMoreActions, setShowMoreActions] = useState(false);
   const moreActionsRef = useRef<HTMLDivElement>(null);
   const [collapsedModules, setCollapsedModules] = useState<Set<string>>(new Set());
-  const [groupBy, setGroupBy] = useState<RunGroupBy>(
-    () => (String(run?.source || 'manual') === 'manual' ? 'module' : 'flat') as RunGroupBy
-  );
+  const [groupBy, setGroupBy] = useState<RunGroupBy>('flat');
   const [caseType, setCaseType] = useState<RunCaseTypeFilter>('all');
   const [assigneeFilters, setAssigneeFilters] = useState<string[]>([]);
   const [priorityFilters, setPriorityFilters] = useState<string[]>([]);
   const [prioritySort, setPrioritySort] = useState<'asc' | 'desc' | null>(null);
-  const runDefaultGroupBy = (String(run?.source || 'manual') === 'manual'
-    ? 'module'
-    : 'flat') as RunGroupBy;
+  // Flat by default for every run source. A tester who explicitly picks a
+  // grouping for a run still gets it back from sessionStorage.
+  const runDefaultGroupBy: RunGroupBy = 'flat';
 
   // Restore the tester's last view for this run (kept until they clear it).
   useEffect(() => {
@@ -520,6 +635,26 @@ export function RunDeck(props: RunDeckProps) {
 
   const [selectedIterIndices, setSelectedIterIndices] = useState<Set<number>>(new Set());
   const [assignItersResult, setAssignItersResult] = useState<any | null>(null);
+  const [executionSettings, setExecutionSettings] = useState<{ restrict_result_recording: boolean } | null>(null);
+  const [executionSettingsLoaded, setExecutionSettingsLoaded] = useState(false);
+
+  const getExecutorName = (executedBy: number | null | undefined) => {
+    if (!executedBy) return null;
+    const member = getMemberForCase(executedBy);
+    return member ? member.name : `User #${executedBy}`;
+  };
+
+  const restrictEnabled = executionSettings?.restrict_result_recording === true;
+  const currentUserMember = members.find(
+    (m: any) => String(m.userId ?? m.user?.id ?? m.id) === String(currentUser?.id)
+  );
+  const currentUserRole = currentUserMember?.role ?? currentUserMember?.user?.role ?? null;
+  const isLeadOrAdmin = currentUserRole === 'ADMIN' || currentUserRole === 'OWNER';
+  const canRecordResult = (result: any) =>
+    !restrictEnabled ||
+    result.assignedTo == null ||
+    result.assignedTo === currentUser?.id ||
+    isLeadOrAdmin;
 
   const teamRows = useMemo(
     () => buildTeamProgress(results as any, resolveAssignee),
@@ -536,6 +671,17 @@ export function RunDeck(props: RunDeckProps) {
       .catch(() => setRunDefects([]))
       .finally(() => setLoadingDefects(false));
   }, [runId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getProjectExecutionSettingsAction(slug)
+      .then((data) => {
+        if (!cancelled) setExecutionSettings(data);
+      })
+      .catch(() => {})
+      .finally(() => setExecutionSettingsLoaded(true));
+    return () => { cancelled = true; };
+  }, [slug]);
 
   const toggleModuleCollapse = (moduleName: string) => {
     setCollapsedModules((prev) => {
@@ -557,52 +703,226 @@ export function RunDeck(props: RunDeckProps) {
   const hasAutomatedCasesInRun = useMemo(
     () =>
       results.some((r) => {
-        const tc = getCase(r.testCaseId);
+        const tc = getCaseOrSnapshot(r);
         return tc ? isAutomatedCase(tc) : false;
       }),
-    [results, getCase]
+    [results, getCaseOrSnapshot]
   );
   const pendingAutomatedCount = useMemo(
     () =>
       results.filter((r) => {
         if (String(r.status).toLowerCase() !== 'pending') return false;
-        const tc = getCase(r.testCaseId);
+        const tc = getCaseOrSnapshot(r);
         if (!tc) return false;
         const source = getCaseAutomationSource(tc);
         return source === 'postman' || source === 'datadog';
       }).length,
-    [results, getCase]
+    [results, getCaseOrSnapshot]
   );
   const hasPendingAutomatedCases = useMemo(
     () =>
       results.some((r) => {
         if (String(r.status).toLowerCase() !== 'pending') return false;
-        const tc = getCase(r.testCaseId);
+        const tc = getCaseOrSnapshot(r);
         if (!tc || !isAutomatedCase(tc)) return false;
         const source = getCaseAutomationSource(tc);
         return source === 'postman' || source === 'datadog';
       }),
-    [results, getCase]
+    [results, getCaseOrSnapshot]
   );
   // Cases that a stop cancelled. They can be continued as new attempts.
   const cancelledAutomatedCount = useMemo(
     () =>
       results.filter((r) => {
         if (String(r.status).toLowerCase() !== 'cancelled') return false;
-        const tc = getCase(r.testCaseId);
+        const tc = getCaseOrSnapshot(r);
         if (!tc) return false;
         const source = getCaseAutomationSource(tc);
         return source === 'postman' || source === 'datadog';
       }).length,
-    [results, getCase]
+    [results, getCaseOrSnapshot]
   );
   const derivedRunState = useMemo(() => deriveRunState(run, results), [run, results]);
+
+  // Environment details (C8): platform / OS / browser / device / build + custom.
+  const environmentDetails = useMemo(() => readRunEnvironmentDetails(run), [run]);
+  const environmentChips = useMemo(
+    () => summarizeRunEnvironment(environmentDetails),
+    [environmentDetails]
+  );
   const hasRunningCase = results.some(
     (r) => String(r.status).toLowerCase() === 'pending' && getCaseRunState(r) === 'RUNNING'
   );
   const hasQueuedCase = results.some(
     (r) => String(r.status).toLowerCase() === 'pending' && getCaseRunState(r) === 'QUEUED'
   );
+
+  /* ── Queue telemetry (C12) ────────────────────────────────────────────
+     The header counts the three live lanes: cases being dispatched to a
+     provider (running), cases the provider accepted but has not returned
+     (waiting), and cases still waiting for a free slot (queued). */
+  const executionStateOf = useCallback(
+    (r: any) => String(r?.executionState || r?.execution_state || '').toUpperCase(),
+    []
+  );
+
+  const queueBreakdown = useMemo(() => {
+    let running = 0;
+    let waiting = 0;
+    let queued = 0;
+    for (const r of results) {
+      if (String(r.status || '').toLowerCase() !== 'pending') continue;
+      const state = executionStateOf(r);
+      if (state === 'WAITING') waiting += 1;
+      else if (state === 'RUNNING') running += 1;
+      else if (state === 'QUEUED') queued += 1;
+    }
+    return { running, waiting, queued };
+  }, [results, executionStateOf]);
+
+  /** Typical duration of a settled case in this run; used only for the ETA. */
+  const avgCaseSeconds = useMemo(() => {
+    const settled = results.filter(
+      (r) =>
+        Number(r.timeSpentSeconds) > 0 &&
+        ['pass', 'fail', 'error', 'blocked', 'skip', 'invalid', 'unavailable'].includes(
+          String(r.status || '').toLowerCase()
+        )
+    );
+    if (settled.length === 0) return 45;
+    const total = settled.reduce((sum, r) => sum + Number(r.timeSpentSeconds || 0), 0);
+    return Math.min(900, Math.max(5, Math.round(total / settled.length)));
+  }, [results]);
+
+  /**
+   * Seconds until a queued case is expected to get a slot: whatever is left of
+   * the soonest-finishing in-flight case, plus one average case per place
+   * ahead in the queue.
+   */
+  const queuedEtaFor = useCallback(
+    (result: any): number | null => {
+      if (executionStateOf(result) !== 'QUEUED') return null;
+      const position = Number(result.queuePosition || 0);
+      if (!position) return null;
+      const inFlightRemaining = results
+        .filter((r) => ['RUNNING', 'WAITING'].includes(executionStateOf(r)))
+        .map((r) => Math.max(0, avgCaseSeconds - Number(r.timeSpentSeconds || 0)));
+      const head = inFlightRemaining.length > 0 ? Math.min(...inFlightRemaining) : 0;
+      const queuedAt = result.queuedAt ? new Date(result.queuedAt).getTime() : Date.now();
+      const elapsed = Math.max(0, Math.round((Date.now() - queuedAt) / 1000));
+      return Math.max(0, head + (position - 1) * avgCaseSeconds - elapsed);
+    },
+    [results, avgCaseSeconds, executionStateOf]
+  );
+
+  /* ── Execution order (C10) ────────────────────────────────────────────
+     Only not-run cases can move, and only while nothing is executing. The
+     server re-numbers just those rows and leaves executed ones in place. */
+  const isReordableRow = useCallback((r: any) => {
+    if (!r) return false;
+    if (String(r.status || '').toLowerCase() !== 'pending') return false;
+    const state = executionStateOf(r);
+    return !state || state === 'IDLE';
+  }, [executionStateOf]);
+
+  const reordableIds = useMemo(
+    () => results.filter(isReordableRow).map((r) => r.id),
+    [results, isReordableRow]
+  );
+
+  const canReorderCases =
+    groupBy === 'flat' &&
+    String(run?.status || '').toLowerCase() === 'in_progress' &&
+    !hasRunningCase &&
+    !hasQueuedCase &&
+    queueBreakdown.waiting === 0 &&
+    reordableIds.length > 1;
+
+  const reorderDisabledReason = canReorderCases
+    ? 'Drag a not-run case to change its execution order'
+    : groupBy !== 'flat'
+      ? 'Switch grouping to Flat to arrange execution order'
+      : String(run?.status || '').toLowerCase() !== 'in_progress'
+        ? 'Execution order can be arranged while the run is in progress'
+        : hasRunningCase || hasQueuedCase || queueBreakdown.waiting > 0
+          ? 'Wait for queued or running cases to finish'
+          : 'At least two not-run cases are needed';
+
+  const [reorderMode, setReorderMode] = useState(false);
+  const [reordering, setReordering] = useState(false);
+  const [dragResultId, setDragResultId] = useState<string | null>(null);
+  const [dragOverResultId, setDragOverResultId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!canReorderCases && reorderMode) setReorderMode(false);
+  }, [canReorderCases, reorderMode]);
+
+  const commitReorder = useCallback(
+    async (nextOrder: string[]) => {
+      // Optimistic: paint the new order immediately, then let the server copy
+      // (orderIndex) replace it.
+      const sorted = [...results];
+      const movableSet = new Set(nextOrder);
+      const movableById = new Map(results.map((r) => [r.id, r]));
+      let cursor = 0;
+      const rebuilt = sorted.map((r) =>
+        movableSet.has(r.id) ? (movableById.get(nextOrder[cursor++]) as any) : r
+      );
+      // Keep the row sequence anchored to the current order_index so a drop in
+      // the middle of the list lands where the user aimed.
+      const byOrder = [...rebuilt].sort(
+        (a, b) => Number(a.orderIndex ?? 0) - Number(b.orderIndex ?? 0)
+      );
+      onResultsChange(byOrder);
+      setReordering(true);
+      try {
+        await reorderRunCasesAction(runId, nextOrder);
+        await refetchResults();
+      } catch (e: any) {
+        toast.error(e?.message || 'Failed to change execution order');
+        await refetchResults();
+      } finally {
+        setReordering(false);
+      }
+    },
+    [results, onResultsChange, refetchResults, runId]
+  );
+
+  const moveReordableCase = useCallback(
+    (resultId: string, targetId: string | null) => {
+      if (!canReorderCases || reordering) return;
+      const withoutDragged = reordableIds.filter((id) => id !== resultId);
+      const targetIndex = targetId ? withoutDragged.indexOf(targetId) : withoutDragged.length;
+      const nextOrder = [...withoutDragged];
+      nextOrder.splice(targetIndex < 0 ? nextOrder.length : targetIndex, 0, resultId);
+      if (nextOrder.join('|') === reordableIds.join('|')) return;
+      void commitReorder(nextOrder);
+    },
+    [canReorderCases, reordering, reordableIds, commitReorder]
+  );
+
+  /** Alt + ↑/↓ reorders without a pointer; the grip is the focus stop. */
+  const moveReordableCaseByOffset = useCallback(
+    (resultId: string, offset: -1 | 1) => {
+      if (!canReorderCases || reordering) return;
+      const index = reordableIds.indexOf(resultId);
+      const target = index + offset;
+      if (index < 0 || target < 0 || target >= reordableIds.length) return;
+      const reference = reordableIds[target];
+      // Dropping "onto" a row inserts before it; for a downward move we must
+      // aim at the row after the neighbour.
+      const anchor =
+        offset === 1 ? reordableIds[target + 1] ?? null : reference;
+      const withoutDragged = reordableIds.filter((id) => id !== resultId);
+      const insertAt = anchor ? withoutDragged.indexOf(anchor) : withoutDragged.length;
+      const nextOrder = [...withoutDragged];
+      nextOrder.splice(insertAt < 0 ? nextOrder.length : insertAt, 0, resultId);
+      if (nextOrder.join('|') === reordableIds.join('|')) return;
+      void commitReorder(nextOrder);
+    },
+    [canReorderCases, reordering, reordableIds, commitReorder]
+  );
+
   // A run stays in the working header until it is explicitly finished. All
   // cases settling makes Finish Run the primary action; it only switches to
   // View Report after the persisted status is completed/aborted.
@@ -779,13 +1099,13 @@ export function RunDeck(props: RunDeckProps) {
     let manual = 0;
     let automated = 0;
     for (const r of results) {
-      const tc = getCase(r.testCaseId);
+      const tc = getCaseOrSnapshot(r);
       if (!tc) continue;
       if (isAutomatedCase(tc)) automated += 1;
       else manual += 1;
     }
     return { all: manual + automated, manual, automated };
-  }, [results, getCase]);
+  }, [results, getCaseOrSnapshot]);
 
 
   // Group results by module, suite, status, or flat
@@ -834,7 +1154,7 @@ export function RunDeck(props: RunDeckProps) {
       const suiteMap = new Map<string | null, any[]>();
 
       for (const result of results) {
-        const tc = getCase(result.testCaseId);
+        const tc = getCaseOrSnapshot(result);
         if (!tc) continue;
         const matchedSuite = suites.find((s: any) =>
           s.suite_cases?.some((sc: any) => sc.test_case_id === tc.id || sc.test_case?.id === tc.id)
@@ -904,7 +1224,7 @@ export function RunDeck(props: RunDeckProps) {
     const moduleMap = new Map<string | null, any[]>();
 
     for (const result of results) {
-      const tc = getCase(result.testCaseId);
+      const tc = getCaseOrSnapshot(result);
       if (!tc) continue;
 
       const key = tc.moduleId || null;
@@ -929,7 +1249,7 @@ export function RunDeck(props: RunDeckProps) {
     });
 
     return groups;
-  }, [results, getCase, modules, suites, members, groupBy]);
+  }, [results, getCaseOrSnapshot, modules, suites, members, groupBy]);
 
   // Filtered results
   const filteredResultsByModule = useMemo(() => {
@@ -938,22 +1258,33 @@ export function RunDeck(props: RunDeckProps) {
 
     return resultsByGroup.map((group) => {
       let filtered = group.results.filter((r) => {
-        const tc = getCase(r.testCaseId);
+        const tc = getCaseOrSnapshot(r);
         if (!tc) return false;
         const matchesSearch =
           !q || tc.title?.toLowerCase().includes(q) || tc.displayId?.toLowerCase().includes(q);
 
         const isRerun = r.status === 'pending' && r.attemptNumber && r.attemptNumber > 1;
+        const liveState = String(r.executionState || '').toUpperCase();
+        const caseState = String(r.caseState || '').toUpperCase();
+        const isWaiting =
+          r.status === 'pending' && (liveState === 'WAITING' || caseState === 'WAITING');
+        const isQueued =
+          r.status === 'pending' && !isWaiting && (liveState === 'QUEUED' || caseState === 'QUEUED');
         const isStarted =
           r.status === 'pending' &&
-          (String(r.caseState || '').toUpperCase() === 'RUNNING' ||
+          !isWaiting &&
+          (liveState === 'RUNNING' ||
+            caseState === 'RUNNING' ||
             (r.timeSpentSeconds && r.timeSpentSeconds > 0));
-        const isPending = r.status === 'pending' && !isStarted;
+        const isPending = r.status === 'pending' && !isStarted && !isQueued && !isWaiting;
         const matchesStatus =
           statusFilters.length === 0 ||
           statusFilters.some((f) => {
             if (f === 'rerun') return !!isRerun;
             if (f === 'started') return !!isStarted;
+            if (f === 'running') return !!isStarted;
+            if (f === 'queued') return !!isQueued;
+            if (f === 'waiting') return !!isWaiting;
             if (f === 'pending') return !!isPending;
             if (f === 'unavailable') return r.status === 'unavailable';
             return r.status === f;
@@ -981,8 +1312,8 @@ export function RunDeck(props: RunDeckProps) {
 
       if (prioritySort) {
         filtered.sort((a, b) => {
-          const tc_a = getCase(a.testCaseId);
-          const tc_b = getCase(b.testCaseId);
+          const tc_a = getCaseOrSnapshot(a);
+          const tc_b = getCaseOrSnapshot(b);
           const pA = tc_a?.priority || 'Z';
           const pB = tc_b?.priority || 'Z';
           if (pA === pB) return 0;
@@ -1000,6 +1331,52 @@ export function RunDeck(props: RunDeckProps) {
   const total = results.length;
   const completedCount = (progress.pass || 0) + (progress.fail || 0) + (progress.error || 0) + (progress.blocked || 0) + (progress.skip || 0) + (progress.invalid || 0);
   const pendingCount = (progress.pending || 0) + (progress.started || 0) + (progress.rerun || 0);
+
+  // Per-status counts for the filter menu, including the live queue states that
+  // only exist on pending rows (waiting / queued / running).
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      pending: 0, waiting: 0, queued: 0, running: 0,
+      pass: 0, fail: 0, blocked: 0, error: 0,
+      skip: 0, invalid: 0, cancelled: 0,
+    };
+    for (const r of results) {
+      const status = String(r.status || '').toLowerCase();
+      if (status === 'pending') {
+        const state = String(r.executionState || '').toUpperCase();
+        const caseState = String(r.caseState || '').toUpperCase();
+        if (state === 'QUEUED' || caseState === 'QUEUED') counts.queued += 1;
+        else if (state === 'WAITING' || caseState === 'WAITING') counts.waiting += 1;
+        else if (state === 'RUNNING' || caseState === 'RUNNING' || (r.timeSpentSeconds || 0) > 0) {
+          counts.running += 1;
+        } else counts.pending += 1;
+      } else if (status in counts) {
+        counts[status] += 1;
+      }
+    }
+    return counts;
+  }, [results]);
+
+  // Executed / total counted at the leaf level: a case driven by a dataset counts
+  // once per iteration, while its parent group row is not counted separately.
+  const { executedLeaves, totalLeaves } = useMemo(() => {
+    const FINAL = new Set(['pass', 'fail', 'blocked', 'error', 'skip', 'invalid']);
+    let executed = 0;
+    let all = 0;
+    for (const r of results) {
+      const iters = ((r as any).iterationResults || (r as any).iteration_results || []) as any[];
+      if (Array.isArray(iters) && iters.length > 1) {
+        all += iters.length;
+        executed += iters.filter((it) =>
+          FINAL.has(String(it?.status || '').toLowerCase())
+        ).length;
+      } else {
+        all += 1;
+        if (FINAL.has(String(r?.status || '').toLowerCase())) executed += 1;
+      }
+    }
+    return { executedLeaves: executed, totalLeaves: all };
+  }, [results]);
   const completedPct = total > 0 ? Math.round((completedCount / total) * 100) : 0;
   const passRate = total > 0 ? Math.round(((progress.pass || 0) / total) * 100) : 0;
   const allCasesHaveFinalResult = total > 0 && completedCount === total;
@@ -1020,7 +1397,7 @@ export function RunDeck(props: RunDeckProps) {
     let manualTotal = 0;
     let manualPending = 0;
     for (const r of results) {
-      const tc = getCase(r.testCaseId);
+      const tc = getCaseOrSnapshot(r);
       if (!tc) continue;
       const isManual = getCaseAutomationSource(tc) === 'manual';
       const state = String(r.status || '').toLowerCase();
@@ -1033,7 +1410,7 @@ export function RunDeck(props: RunDeckProps) {
       }
     }
     return { automatedTotal, automatedDone, manualTotal, manualPending };
-  }, [results, getCase]);
+  }, [results, getCaseOrSnapshot]);
 
   const runStatusChip = useMemo<{ label: string; tone: StatusPillTone } | null>(() => {
     if (derivedRunState === 'IN_PROGRESS')
@@ -1063,11 +1440,11 @@ export function RunDeck(props: RunDeckProps) {
   const priorityCounts = useMemo(() => {
     const counts: Record<string, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
     results.forEach((r) => {
-      const p = String(getCase(r.testCaseId)?.priority || '').toUpperCase();
+      const p = String(getCaseOrSnapshot(r)?.priority || '').toUpperCase();
       if (p in counts) counts[p] += 1;
     });
     return counts;
-  }, [results, getCase]);
+  }, [results, getCaseOrSnapshot]);
 
   const assigneeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -1340,13 +1717,30 @@ export function RunDeck(props: RunDeckProps) {
   const [showAbortConfirm, setShowAbortConfirm] = useState(false);
 
   const [showEditDialog, setShowEditDialog] = useState(false);
-  const [editForm, setEditForm] = useState<{ name: string; environment: string; buildVersion: string; assignedTo: number | null }>({
+  const [removingResultIds, setRemovingResultIds] = useState<Set<string>>(new Set());
+  const [editForm, setEditForm] = useState<{
+    name: string;
+    environment: string;
+    buildVersion: string;
+    assignedTo: number | null;
+    environmentDetails: RunEnvironmentDetails;
+  }>({
     name: '',
     environment: '',
     buildVersion: '',
     assignedTo: null,
+    environmentDetails: {},
   });
   const [editBusy, setEditBusy] = useState(false);
+
+  // C2: run-level and per-case discussion. The server already stores comments
+  // for `run` and `run_result`; this is just the deck surface.
+  const [commentsTarget, setCommentsTarget] = useState<{
+    entityId: string;
+    entityType: 'run' | 'run_result';
+    title: string;
+    description?: string;
+  } | null>(null);
 
   const [showAddCasesDialog, setShowAddCasesDialog] = useState(false);
   const [addCasesSearch, setAddCasesSearch] = useState('');
@@ -1397,6 +1791,7 @@ export function RunDeck(props: RunDeckProps) {
         environment: editForm.environment,
         buildVersion: editForm.buildVersion || undefined,
         assignedTo: editForm.assignedTo,
+        environmentDetails: normalizeRunEnvironmentDetails(editForm.environmentDetails),
       });
       toast.success('Run updated');
       setShowEditDialog(false);
@@ -1446,13 +1841,6 @@ export function RunDeck(props: RunDeckProps) {
     }
   };
 
-  const openCaseDetail = (testCase: { displayId?: string | null; id: string }) => {
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('run_deck_scroll_y', String(window.scrollY));
-    }
-    router.push(`/p/${slug}/runs/${runId}/${testCase.displayId || testCase.id}`);
-  };
-
   const getMemberForCase = (userId: number | null) => {
     if (!userId) return null;
     return members.find((m: any) => m.userId === userId || m.user?.id === userId)?.user || null;
@@ -1465,7 +1853,9 @@ export function RunDeck(props: RunDeckProps) {
 
   const headerActions = (
     <div className="flex items-center gap-2 shrink-0">
-      {run.status !== 'completed' ? (
+      {run.status === 'completed' || run.status === 'aborted' || run.status === 'failed' ? (
+        <Button size="sm" onClick={(e) => navigateTo(e, `/p/${slug}/runs/${run.id}/report`, router.push)} className="gradient-btn text-white h-8 text-xs px-3.5 font-semibold shadow-sm cursor-pointer">View Report</Button>
+      ) : (
         <>
           {hasRunningCase || hasQueuedCase ? (
             <Button size="sm" onClick={async () => { try { await stopRunExecutionAction(runId, false); await refetchResults(); await onRunUpdated?.(); toast.success('Run stopped'); } catch(e:any) { toast.error(e.message || 'Failed'); } }} className="gradient-btn text-white h-8 text-xs px-3 shadow-sm gap-1.5 cursor-pointer"><Pause className="h-3.5 w-3.5" /> Stop</Button>
@@ -1476,9 +1866,8 @@ export function RunDeck(props: RunDeckProps) {
           ) : (
             <Button size="sm" onClick={handleFinishRun} className="gradient-btn text-white h-8 text-xs px-3.5 font-semibold shadow-sm cursor-pointer">Finish Run</Button>
           )}
+          <Button size="sm" variant="outline" onClick={(e) => navigateTo(e, `/p/${slug}/runs/${run.id}/report`, router.push)} className="h-8 text-xs px-3.5 font-semibold shadow-sm cursor-pointer">View Report</Button>
         </>
-      ) : (
-        <Button size="sm" onClick={() => router.push(`/p/${slug}/runs/${run.id}/report`)} className="gradient-btn text-white h-8 text-xs px-3.5 font-semibold shadow-sm cursor-pointer">View Report</Button>
       )}
 
       {isAutomatedFlowRun && failedCaseCount > 0 && (
@@ -1494,11 +1883,34 @@ export function RunDeck(props: RunDeckProps) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
           <DropdownMenuItem onSelect={() => setShowAddCasesDialog(true)} disabled={run.status !== 'in_progress'} className="gap-2 text-xs cursor-pointer"><Plus className="h-3.5 w-3.5" /> Add Cases</DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() =>
+              setCommentsTarget({
+                entityId: run.id,
+                entityType: 'run',
+                title: 'Run comments',
+                description: run.name,
+              })
+            }
+            className="gap-2 text-xs cursor-pointer"
+          >
+            <MessageSquare className="h-3.5 w-3.5" /> Comments
+          </DropdownMenuItem>
+          {canReorderCases && (
+            <DropdownMenuItem
+              onSelect={() => setReorderMode((prev) => !prev)}
+              className="gap-2 text-xs cursor-pointer"
+              title="Reorder not-run cases with drag & drop or Alt+↑/↓"
+            >
+              <GripVertical className="h-3.5 w-3.5" />
+              {reorderMode ? 'Done reordering' : 'Reorder cases'}
+            </DropdownMenuItem>
+          )}
           {hasAnyIterationsInRun && (
             <DropdownMenuItem onSelect={() => { setExpandAllIters((p) => !p); }} className="gap-2 text-xs cursor-pointer"><Layers className="h-3.5 w-3.5" /> {expandAllIters ? 'Collapse all iterations' : 'Expand all iterations'}</DropdownMenuItem>
           )}
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => { setEditForm({ name: run.name, environment: run.environment, buildVersion: run.buildVersion || '', assignedTo: run.assignedTo || null }); setShowEditDialog(true); }} className="gap-2 text-xs cursor-pointer"><Edit className="h-3.5 w-3.5" /> Edit Run</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => { setEditForm({ name: run.name, environment: run.environment, buildVersion: run.buildVersion || '', assignedTo: run.assignedTo || null, environmentDetails: readRunEnvironmentDetails(run) }); setShowEditDialog(true); }} className="gap-2 text-xs cursor-pointer"><Edit className="h-3.5 w-3.5" /> Edit Run</DropdownMenuItem>
           <DropdownMenuItem onSelect={handleClone} className="gap-2 text-xs cursor-pointer"><Copy className="h-3.5 w-3.5" /> Clone Run</DropdownMenuItem>
           <DropdownMenuItem onSelect={handleRerun} className="gap-2 text-xs cursor-pointer"><RotateCcw className="h-3.5 w-3.5" /> Rerun All Cases</DropdownMenuItem>
           <DropdownMenuItem disabled={pendingCount === 0} onSelect={handleSkipPending} className="gap-2 text-xs cursor-pointer"><SkipForward className="h-3.5 w-3.5" /> Skip Remaining</DropdownMenuItem>
@@ -1569,6 +1981,16 @@ export function RunDeck(props: RunDeckProps) {
                   </span>
                 </>
               )}
+              {environmentChips.map((chip) => (
+                <span
+                  key={chip.key}
+                  className="inline-flex items-center gap-1 rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 text-[10px] text-muted-foreground shrink-0"
+                  title={`${chip.label}: ${chip.value}`}
+                >
+                  <span className="uppercase tracking-wide opacity-70">{chip.label}</span>
+                  <span className="font-medium text-foreground/80 max-w-[9rem] truncate">{chip.value}</span>
+                </span>
+              ))}
               {runStatusChip && (
                 <>
                   <span className="mx-0.5 opacity-40">·</span>
@@ -1602,6 +2024,21 @@ export function RunDeck(props: RunDeckProps) {
                   <span>Automated {automatedDone}/{automatedTotal}</span>
                   <span>·</span>
                   <span>Manual {manualPending} pending</span>
+                </>
+              )}
+              {queueBreakdown.running + queueBreakdown.waiting + queueBreakdown.queued > 0 && (
+                <>
+                  <span className="mx-1 opacity-40">|</span>
+                  <span className="inline-flex items-center gap-2 font-mono text-[10.5px] tabular-nums">
+                    <span className="inline-flex items-center gap-1.5">
+                      <i className="running-dot" />
+                      Running {queueBreakdown.running}
+                    </span>
+                    <span className="opacity-40">·</span>
+                    <span>Queued {queueBreakdown.queued}</span>
+                    <span className="opacity-40">·</span>
+                    <span>Waiting {queueBreakdown.waiting}</span>
+                  </span>
                 </>
               )}
             </div>
@@ -1687,6 +2124,25 @@ export function RunDeck(props: RunDeckProps) {
                 onChange={(mode) => updateViewFilters({ groupBy: mode })}
               />
 
+              <Tooltip content={reorderDisabledReason} side="top">
+                <button
+                  type="button"
+                  onClick={() => setReorderMode((prev) => !prev)}
+                  disabled={!canReorderCases}
+                  aria-pressed={reorderMode}
+                  className={cn(
+                    'flex items-center gap-1.5 text-xs font-medium px-2.5 h-8 rounded-lg border transition-all',
+                    reorderMode
+                      ? 'border-primary/50 text-primary bg-primary/10 cursor-pointer'
+                      : 'border-border text-muted-foreground bg-background/50 hover:bg-muted cursor-pointer',
+                    !canReorderCases && 'opacity-50 cursor-not-allowed hover:bg-background/50'
+                  )}
+                >
+                  <GripVertical className="h-3.5 w-3.5" />
+                  <span>{reorderMode ? 'Done' : 'Arrange'}</span>
+                </button>
+              </Tooltip>
+
               <Popover>
                 <PopoverTrigger asChild>
                   <button
@@ -1723,11 +2179,9 @@ export function RunDeck(props: RunDeckProps) {
                       open={openFilterGroup === 'status'}
                       onToggle={() => setOpenFilterGroup(openFilterGroup === 'status' ? null : 'status')}
                     >
-                      {RUN_STATUS_FILTER_OPTIONS.filter(
-                        (o) => o.value !== 'pending' || pendingCount > 0
-                      )
-                        .filter((o) => o.always || (progress[o.value] || 0) > 0)
-                        .map((o) => (
+                      {RUN_STATUS_FILTER_OPTIONS.map((o) => {
+                        const count = (statusCounts as Record<string, number>)[o.value] || 0;
+                        return (
                           <FilterOption
                             key={o.value}
                             selected={statusFilters.includes(o.value)}
@@ -1735,15 +2189,21 @@ export function RunDeck(props: RunDeckProps) {
                               updateViewFilters({ statuses: toggleFromList(statusFilters, o.value) })
                             }
                           >
-                            <span className="flex items-center gap-1.5">
+                            <span className={cn('flex items-center gap-1.5', count === 0 && 'opacity-50')}>
                               <span className={cn('h-1.5 w-1.5 rounded-full', o.dot)} />
                               <span>{o.label}</span>
                             </span>
-                            <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-                              {o.value === 'pending' ? pendingCount : progress[o.value] || 0}
+                            <span
+                              className={cn(
+                                'ml-auto font-mono text-[10px]',
+                                count === 0 ? 'text-muted-foreground/40' : 'text-muted-foreground'
+                              )}
+                            >
+                              {count}
                             </span>
                           </FilterOption>
-                        ))}
+                        );
+                      })}
                     </FilterSection>
 
                     <FilterSection
@@ -1971,18 +2431,23 @@ export function RunDeck(props: RunDeckProps) {
               side="bottom"
               align="end"
             >
-                <div className="transition-transform group-hover/ring:scale-105 shrink-0">
-                  <ProgressCircle
-                    size={92}
-                    strokeWidth={5}
-                    segmented
-                    segments={{ pass: progress.pass, fail: progress.fail, blocked: progress.blocked, invalid: progress.invalid, skip: progress.skip, unavailable: progress.unavailable, total: total }}
-                    centerContent={
-                      <span className="text-base font-bold font-mono tracking-tight text-foreground">
-                        {run.status === 'completed' ? passRate : completedPct}%
-                      </span>
-                    }
-                  />
+                <div className="flex flex-col items-center shrink-0">
+                  <div className="transition-transform group-hover/ring:scale-105 shrink-0">
+                    <ProgressCircle
+                      size={92}
+                      strokeWidth={5}
+                      segmented
+                      segments={{ pass: progress.pass, fail: progress.fail, blocked: progress.blocked, invalid: progress.invalid, skip: progress.skip, unavailable: progress.unavailable, total: total }}
+                      centerContent={
+                        <span className="text-base font-bold font-mono tracking-tight text-foreground">
+                          {run.status === 'completed' ? passRate : completedPct}%
+                        </span>
+                      }
+                    />
+                  </div>
+                  <span className="mt-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
+                    {executedLeaves}/{totalLeaves} executed
+                  </span>
                 </div>
             </Tooltip>
               <div className="flex flex-col items-end text-right cursor-pointer group/ring">
@@ -2058,6 +2523,21 @@ export function RunDeck(props: RunDeckProps) {
 
       {/* ── Table ── */}
       <div className="flex-1 overflow-y-auto group/table">
+        {reorderMode && (
+          <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-primary/25 bg-primary/[0.06] px-3 py-1.5 text-[11px] text-primary">
+            <GripVertical className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 truncate">
+              Drag a pending case, or focus one and press Alt+↑/↓. Executed cases keep their slot.
+            </span>
+            <button
+              type="button"
+              onClick={() => setReorderMode(false)}
+              className="ml-auto shrink-0 rounded-md px-2 py-0.5 font-semibold hover:bg-primary/10 transition-colors cursor-pointer"
+            >
+              Done
+            </button>
+          </div>
+        )}
         {filteredResultsByModule.length === 0 ? (
           <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
             No results match your filters
@@ -2239,7 +2719,7 @@ export function RunDeck(props: RunDeckProps) {
                     </div>
                     {/* Rows */}
                     {group.results.map((result) => {
-                      const testCase = getCase(result.testCaseId);
+                      const testCase = getCaseOrSnapshot(result);
                       if (!testCase) return null;
                       const caseRunState = getCaseRunState(result);
                       const caseUsesAutomated =
@@ -2266,22 +2746,75 @@ export function RunDeck(props: RunDeckProps) {
                       const snap = run?.resolved_datasets?.[result.testCaseId];
                       const caseDs = snap || testCase?.dataset || testCase?.local_dataset || (testCase as any)?.localDataset;
                       const hasIterations = Boolean(caseDs && Array.isArray(caseDs.rows) && caseDs.rows.length > 1);
+                      const hasAttemptChip =
+                        (result.attemptNumber && result.attemptNumber > 1) ||
+                        (result.totalAttempts && result.totalAttempts > 1);
                       const statusBadge = caseUsesAutomated ? (
-                        <CaseStateBadge state={caseRunState} queuePosition={(result as any).queuePosition} />
+                        <span className="inline-flex items-center gap-1.5 select-none shrink-0">
+                          <CaseStateBadge
+                            state={caseRunState}
+                            queuePosition={(result as any).queuePosition}
+                            waiting={executionStateOf(result) === 'WAITING'}
+                            etaSeconds={queuedEtaFor(result)}
+                          />
+                          {hasAttemptChip && (
+                            <span className="font-mono text-[10.5px] text-muted-foreground/70 shrink-0">
+                              Att #{result.attemptNumber || 1}
+                            </span>
+                          )}
+                        </span>
                       ) : (
                         <ResultStatusBadge
                           status={result.status}
                           attemptNumber={result.attemptNumber}
                           timeSpentSeconds={result.timeSpentSeconds}
+                          started={Boolean(result.startedAt)}
                           isManualOverride={isManualOverride}
                           variant="subtle"
                         />
                       );
                       const canQuickStatus =
-                        !caseUsesAutomated && result.status === 'pending' && run.status !== 'aborted';
+                        !caseUsesAutomated &&
+                        result.status === 'pending' &&
+                        run.status !== 'aborted' &&
+                        canRecordResult(result);
+
+                      const rowReordable = canReorderCases && isReordableRow(result);
 
                       return (
-                        <div key={result.id} className="border-b last:border-b-0">
+                        <div
+                          key={result.id}
+                          className={cn(
+                            'border-b last:border-b-0',
+                            reorderMode && rowReordable && dragOverResultId === result.id && 'ring-2 ring-inset ring-primary/60'
+                          )}
+                          onDragOver={
+                            reorderMode && rowReordable
+                              ? (e) => {
+                                  e.preventDefault();
+                                  if (dragOverResultId !== result.id) setDragOverResultId(result.id);
+                                }
+                              : undefined
+                          }
+                          onDragLeave={
+                            reorderMode && rowReordable
+                              ? () => setDragOverResultId((prev) => (prev === result.id ? null : prev))
+                              : undefined
+                          }
+                          onDrop={
+                            reorderMode && rowReordable
+                              ? (e) => {
+                                  e.preventDefault();
+                                  const draggedId = dragResultId || e.dataTransfer.getData('text/plain');
+                                  setDragOverResultId(null);
+                                  setDragResultId(null);
+                                  if (draggedId && draggedId !== result.id) {
+                                    moveReordableCase(draggedId, result.id);
+                                  }
+                                }
+                              : undefined
+                          }
+                        >
                           <div
                             className={cn(
                               CASE_TABLE_GRID,
@@ -2289,18 +2822,52 @@ export function RunDeck(props: RunDeckProps) {
                             )}
                           >
                             <div className="relative flex items-center justify-center h-full w-full">
-                              <span className={cn(
-                                "absolute inset-0 flex items-center justify-center select-none font-mono text-[10px] leading-none text-muted-foreground/50 tabular-nums transition-opacity duration-150",
-                                isSelected ? "opacity-0" : "group-hover/row:opacity-0"
-                              )}>
-                                {resultIndexMap.get(result.id)}
-                              </span>
+                              {reorderMode && rowReordable ? (
+                                <button
+                                  type="button"
+                                  draggable={!reordering}
+                                  onDragStart={(e) => {
+                                    setDragResultId(result.id);
+                                    e.dataTransfer.effectAllowed = 'move';
+                                    e.dataTransfer.setData('text/plain', result.id);
+                                  }}
+                                  onDragEnd={() => {
+                                    setDragResultId(null);
+                                    setDragOverResultId(null);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (!e.altKey) return;
+                                    if (e.key === 'ArrowUp') {
+                                      e.preventDefault();
+                                      moveReordableCaseByOffset(result.id, -1);
+                                    } else if (e.key === 'ArrowDown') {
+                                      e.preventDefault();
+                                      moveReordableCaseByOffset(result.id, 1);
+                                    }
+                                  }}
+                                  className="absolute inset-0 z-20 flex items-center justify-center rounded text-muted-foreground/60 outline-none transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/60 cursor-grab active:cursor-grabbing disabled:opacity-40"
+                                  title="Drag to reorder — or focus and press Alt+↑ / Alt+↓"
+                                  aria-label={`Reorder case ${testCase.displayId} (Alt+Arrow keys)`}
+                                >
+                                  <GripVertical className="h-3.5 w-3.5" />
+                                </button>
+                              ) : (
+                                <span className={cn(
+                                  "absolute inset-0 flex items-center justify-center select-none font-mono text-[10px] leading-none text-muted-foreground/50 tabular-nums transition-opacity duration-150",
+                                  isSelected ? "opacity-0" : "group-hover/row:opacity-0"
+                                )}>
+                                  {resultIndexMap.get(result.id)}
+                                </span>
+                              )}
                               <Checkbox
                                 checked={isSelected}
                                 onCheckedChange={() => toggleSelect(result.id)}
                                 className={cn(
                                   "absolute z-10 shrink-0 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 transition-opacity",
-                                  isSelected && "opacity-100"
+                                  isSelected && "opacity-100",
+                                  // The grip owns this 24px cell while reordering;
+                                  // bulk selection stays available from the group header.
+                                  reorderMode && rowReordable && "hidden"
                                 )}
                               />
                             </div>
@@ -2330,9 +2897,14 @@ export function RunDeck(props: RunDeckProps) {
                                       <ChevronRight className={cn("h-3.5 w-3.5 transition-transform duration-200", (expandAllIters || expandedIters.has(result.id)) && "rotate-90")} />
                                     </button>
                                   )}
-                                  <button
-                                    type="button"
-                                    onClick={() => openCaseDetail(testCase)}
+                                  <Link
+                                    href={`/p/${slug}/runs/${runId}/${testCase.displayId || testCase.id}`}
+                                    onClick={() => {
+                                      // Restore the deck scroll position when coming back.
+                                      if (typeof window !== 'undefined') {
+                                        sessionStorage.setItem('run_deck_scroll_y', String(window.scrollY));
+                                      }
+                                    }}
                                     className="flex w-full min-w-0 items-center gap-2 rounded-md outline-none cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                                   >
                                     <span className="flex shrink-0 items-center gap-1.5">
@@ -2345,14 +2917,40 @@ export function RunDeck(props: RunDeckProps) {
                                       <span className="truncate text-sm font-medium text-foreground/90 group-hover/row:text-primary transition-colors">
                                         {testCase.title}
                                       </span>
-                                      {((result.attemptNumber && result.attemptNumber > 1) || (result.totalAttempts && result.totalAttempts > 1)) && (
-                                        <span className="font-mono text-[10.5px] font-semibold text-muted-foreground/70 bg-muted px-1.5 py-0.5 rounded border border-border/50 shrink-0">
-                                          Att #{result.attemptNumber || 1}
+                                      {/* Snapshot drift: the case was edited after it was added to this run. */}
+                                      {result.caseSnapshot?.snapshotVersion != null &&
+                                        result.caseSnapshot.currentVersion >
+                                          result.caseSnapshot.snapshotVersion && (
+                                          <span
+                                            className="shrink-0 inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300"
+                                            title={`The case is now v${result.caseSnapshot.currentVersion}; this run locked v${result.caseSnapshot.snapshotVersion} when it was added.`}
+                                          >
+                                            <History className="h-2.5 w-2.5" />
+                                            Updated since added
+                                          </span>
+                                        )}
+                                      {result.caseSnapshot?.deletedAt && (
+                                        <span
+                                          className="shrink-0 inline-flex items-center gap-1 rounded border border-red-500/40 bg-red-500/10 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400"
+                                          title="This case was deleted from the repository; the run keeps its snapshot."
+                                        >
+                                          <Trash2 className="h-2.5 w-2.5" />
+                                          Deleted
                                         </span>
                                       )}
+                                      {!result.caseSnapshot?.deletedAt &&
+                                        String(testCase.status || '').toLowerCase() === 'archived' && (
+                                          <span
+                                            className="shrink-0 inline-flex items-center gap-1 rounded border border-border/70 bg-muted/50 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground"
+                                            title="This case is archived in the repository; the run keeps its snapshot."
+                                          >
+                                            <Layers className="h-2.5 w-2.5" />
+                                            Archived
+                                          </span>
+                                        )}
                                       <CaseSourceIcon testCase={testCase} className="shrink-0" />
                                     </span>
-                                  </button>
+                                  </Link>
                                 </div>
                               </Tooltip>
 
@@ -2431,6 +3029,21 @@ export function RunDeck(props: RunDeckProps) {
                             </div>
 
                             <div className="relative flex min-w-0 items-center justify-start gap-1.5 text-left">
+                              {/* Executor attribution when someone other than the assignee executed the case.
+                                  Machine-settled results carry no human attribution; who started
+                                  the run is shown in the activity feed and the assignee column. */}
+                              {result.executedBy != null &&
+                                result.executedBy !== result.assignedTo &&
+                                String(result.source || '').toLowerCase() !== 'automated' && (
+                                <span
+                                  className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground font-mono truncate"
+                                  title="Executed by"
+                                >
+                                  <span className="text-muted-foreground/40">by</span>{' '}
+                                  <span className="text-foreground/70">{getExecutorName(result.executedBy)}</span>{' '}
+                                  <span className="text-muted-foreground/30">·</span>
+                                </span>
+                              )}
                               {canQuickStatus ? (
                                 <Popover
                                   open={hoverStatusId === result.id}
@@ -2452,6 +3065,18 @@ export function RunDeck(props: RunDeckProps) {
                                     collisionPadding={12}
                                     className="w-36 space-y-0.5 p-1 text-xs"
                                   >
+                                    {/* Inline note when a non-assignee opens the result controls. */}
+                                    {result.assignedTo != null && result.assignedTo !== currentUser?.id && (
+                                      <div className="px-2 py-1 border-b border-border/50">
+                                        <p className="text-[9px] text-muted-foreground">
+                                          Assigned to{' '}
+                                          <span className="font-medium text-foreground/80">
+                                            {getExecutorName(result.assignedTo) ?? 'someone'}
+                                          </span>{' '}
+                                          . Your name will be recorded as the executor.
+                                        </p>
+                                      </div>
+                                    )}
                                     <div className="px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-muted-foreground/60">
                                       Select
                                     </div>
@@ -2475,9 +3100,20 @@ export function RunDeck(props: RunDeckProps) {
                                   </PopoverContent>
                                 </Popover>
                               ) : (
-                                <div className="flex min-w-0 items-center justify-start select-none">
-                                  {statusBadge}
-                                </div>
+                                <Tooltip
+                                  content={
+                                    restrictEnabled &&
+                                    result.assignedTo != null &&
+                                    result.assignedTo !== currentUser?.id &&
+                                    !isLeadOrAdmin
+                                      ? 'Only the assignee, project leads or admins can record a result for this case.'
+                                      : 'Status cannot be changed for this case.'
+                                  }
+                                >
+                                  <div className="flex min-w-0 items-center justify-start select-none">
+                                    {statusBadge}
+                                  </div>
+                                </Tooltip>
                               )}
 
                               {/* Start a not-yet-run case. Re-running a settled
@@ -2578,7 +3214,7 @@ export function RunDeck(props: RunDeckProps) {
                                   >
                                     <div className="flex flex-col cursor-pointer hover:text-foreground transition-colors group/dur">
                                       <span className="text-foreground/90 font-medium whitespace-nowrap tabular-nums">
-                                        {formatDuration(result.timeSpentSeconds)}
+                                        <LiveTime result={result} />
                                       </span>
                                       <span className="text-[9.5px] text-muted-foreground/60 group-hover/dur:text-muted-foreground transition-colors whitespace-nowrap tabular-nums">
                                         Σ {formatDuration(result.totalTimeSpentSeconds || result.timeSpentSeconds)}
@@ -2587,7 +3223,7 @@ export function RunDeck(props: RunDeckProps) {
                                   </Tooltip>
                                 ) : (
                                   <span className="text-foreground/80 font-medium whitespace-nowrap tabular-nums">
-                                    {formatDuration(result.timeSpentSeconds)}
+                                    <LiveTime result={result} />
                                   </span>
                                 )
                               ) : (
@@ -2680,11 +3316,27 @@ export function RunDeck(props: RunDeckProps) {
                                     <span>Unassign</span>
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
-                                    onSelect={() => router.push(`/p/${slug}/repository/${testCase.displayId}`)}
+                                    onSelect={(e) =>
+                                      navigateTo(e as unknown as ModifierClickLike, `/p/${slug}/repository/${testCase.displayId}`, router.push)
+                                    }
                                     className="gap-2 text-xs"
                                   >
                                     <ExternalLink className="h-3.5 w-3.5" />
                                     <span>View Case</span>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onSelect={() =>
+                                      setCommentsTarget({
+                                        entityId: result.id,
+                                        entityType: 'run_result',
+                                        title: 'Case comments',
+                                        description: `${testCase.displayId} · ${testCase.title}`,
+                                      })
+                                    }
+                                    className="gap-2 text-xs"
+                                  >
+                                    <MessageSquare className="h-3.5 w-3.5" />
+                                    <span>Comments</span>
                                   </DropdownMenuItem>
                                   {hasIterations && (
                                     <DropdownMenuItem
@@ -3009,7 +3661,7 @@ export function RunDeck(props: RunDeckProps) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit Run</DialogTitle>
-            <DialogDescription>Update run name, environment, build version, or default assignee.</DialogDescription>
+            <DialogDescription>Update run name, environment, build version, default assignee, or the cases in this run.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -3044,6 +3696,12 @@ export function RunDeck(props: RunDeckProps) {
                 placeholder="Optional"
               />
             </div>
+            {/* Where the run executed (C8). Blank rows are dropped on save. */}
+            <EnvironmentDetailsFields
+              value={editForm.environmentDetails}
+              onChange={(next) => setEditForm((p) => ({ ...p, environmentDetails: next }))}
+              className="pt-1"
+            />
             <div className="space-y-2">
               <label className="text-sm font-medium">Assignee (Default)</label>
               <select
@@ -3058,6 +3716,92 @@ export function RunDeck(props: RunDeckProps) {
                   </option>
                 ))}
               </select>
+            </div>
+
+            {/* Cases in this run. Removal is immediate (the case stops counting
+                towards this run); cases that already have a recorded result are
+                history and cannot be removed here. */}
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-sm font-medium">
+                  Cases
+                  <span className="ml-1.5 font-mono text-[11px] font-normal text-muted-foreground tabular-nums">
+                    {results.length}
+                  </span>
+                </label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2.5 text-xs gap-1.5 cursor-pointer"
+                  disabled={run.status !== 'in_progress' || removingResultIds.size > 0}
+                  onClick={() => {
+                    setShowEditDialog(false);
+                    setShowAddCasesDialog(true);
+                  }}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add cases
+                </Button>
+              </div>
+              <div className="max-h-52 overflow-y-auto rounded-lg border border-border/60 divide-y divide-border/40">
+                {results.length === 0 && (
+                  <div className="px-3 py-3 text-xs text-muted-foreground">No cases in this run.</div>
+                )}
+                {results.map((r: any) => {
+                  const tc = getCaseOrSnapshot(r);
+                  const state = getCaseRunState(r);
+                  const removable = state === 'NOT_RUN' && run.status === 'in_progress';
+                  return (
+                    <div key={r.id} className="flex items-center gap-2 px-2.5 py-1.5 min-w-0">
+                      <span className="shrink-0 font-mono text-[11px] font-semibold text-primary">
+                        {tc?.displayId || '—'}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-foreground/90" title={tc?.title}>
+                        {tc?.title || 'Unknown case'}
+                      </span>
+                      <CaseStateBadge state={state} queuePosition={(r as any).queuePosition} />
+                      <button
+                        type="button"
+                        disabled={!removable || removingResultIds.has(r.id)}
+                        onClick={async () => {
+                          setRemovingResultIds((prev) => new Set(prev).add(r.id));
+                          try {
+                            await deleteRunResultAction(r.id);
+                            await refetchResults();
+                            toast.success('Case removed from run');
+                          } catch (e: any) {
+                            toast.error(e?.message || 'Failed to remove case');
+                          } finally {
+                            setRemovingResultIds((prev) => {
+                              const next = new Set(prev);
+                              next.delete(r.id);
+                              return next;
+                            });
+                          }
+                        }}
+                        className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground cursor-pointer disabled:cursor-not-allowed"
+                        title={
+                          removable
+                            ? 'Remove this case from the run'
+                            : 'Cases with a recorded result stay in the run history'
+                        }
+                        aria-label={`Remove ${tc?.displayId || 'case'} from run`}
+                      >
+                        {removingResultIds.has(r.id) ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <X className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                New cases are appended to the end of the execution order. While the run is
+                executing, appended cases join the queue automatically.
+              </p>
             </div>
           </div>
           <DialogFooter>
@@ -3300,7 +4044,7 @@ export function RunDeck(props: RunDeckProps) {
 
       {/* ── View Iterations Dialog Modal ── */}
       {viewingIterationsResult && (() => {
-        const tc = getCase(viewingIterationsResult.testCaseId);
+        const tc = getCaseOrSnapshot(viewingIterationsResult);
         const snap = run?.resolved_datasets?.[viewingIterationsResult.testCaseId];
         const caseDs = snap || tc?.dataset || tc?.local_dataset || (tc as any)?.localDataset;
         const itList = ((viewingIterationsResult.iterationResults || viewingIterationsResult.iteration_results || []) as any[]);
@@ -3376,10 +4120,10 @@ export function RunDeck(props: RunDeckProps) {
                 <div className="flex items-center gap-2 shrink-0">
                   <Button
                     size="sm"
-                    onClick={() => {
+                    onClick={(e) => {
                       const cKey = tc?.displayId || tc?.id;
                       setViewingIterationsResult(null);
-                      router.push(`/p/${slug}/runs/${runId}/${cKey}`);
+                      navigateTo(e, `/p/${slug}/runs/${runId}/${cKey}`, router.push);
                     }}
                     className="h-8 text-xs font-semibold gradient-btn text-white cursor-pointer shadow-xs"
                   >
@@ -3807,7 +4551,7 @@ export function RunDeck(props: RunDeckProps) {
           </DialogHeader>
           <div className="py-2 space-y-4 max-h-[60vh] overflow-y-auto">
             {assignItersResult && (() => {
-              const testCase = getCase(assignItersResult.testCaseId);
+              const testCase = getCaseOrSnapshot(assignItersResult);
               const caseDs = run?.resolved_datasets?.[assignItersResult.testCaseId] || testCase?.dataset || testCase?.local_dataset || (testCase as any)?.localDataset;
               const rows = caseDs?.rows || [];
               const iterResultsList = (assignItersResult.iterationResults || assignItersResult.iteration_results || []) as any[];
@@ -4089,6 +4833,18 @@ export function RunDeck(props: RunDeckProps) {
           </p>
         </div>
       )}
+
+      <RunCommentsDialog
+        open={!!commentsTarget}
+        onOpenChange={(open) => !open && setCommentsTarget(null)}
+        entityId={commentsTarget?.entityId ?? ''}
+        entityType={commentsTarget?.entityType ?? 'run'}
+        projectId={run.projectId}
+        title={commentsTarget?.title ?? 'Comments'}
+        description={commentsTarget?.description}
+        members={members}
+        currentUserId={currentUser?.id}
+      />
 
       <DefectDetailModal
         open={!!selectedDefect}

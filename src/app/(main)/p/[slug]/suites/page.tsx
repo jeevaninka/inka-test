@@ -25,6 +25,7 @@ import {
 import { Select } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { navigateTo } from '@/lib/navigation';
 import type { SuiteType } from '@/lib/types';
 import {
   createTestSuiteAction,
@@ -755,7 +756,7 @@ export default function SuitesPage() {
             data={filteredArchivedSuites}
             columns={archivedColumns}
             loading={archivedLoading}
-            onRowClick={(row) => router.push(`/p/${slug}/suites/${row.id}`)}
+            onRowClick={(row, event) => navigateTo(event, `/p/${slug}/suites/${row.id}`, router.push)}
             getId={(row) => row.id}
             tableClassName="min-w-[720px] w-full"
             emptyComponent={
@@ -774,7 +775,7 @@ export default function SuitesPage() {
           <DataTable
             data={filteredSuites}
             columns={columns}
-            onRowClick={(row) => router.push(`/p/${slug}/suites/${row.id}`)}
+            onRowClick={(row, event) => navigateTo(event, `/p/${slug}/suites/${row.id}`, router.push)}
             getId={(row) => row.id}
             selectable={canEdit}
             selectedIds={selectedSuiteIds}

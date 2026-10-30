@@ -3,6 +3,8 @@
 import { useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { MOTION } from '@/lib/motion';
 import Link from 'next/link';
 import { format, formatDistanceToNow } from 'date-fns';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
@@ -97,6 +99,9 @@ const SCENARIO_OPTIONS = [
   { value: 'boundary', label: 'Boundary' },
 ];
 
+const TITLE_MAX_LENGTH = 100;
+const TITLE_SOFT_WARNING_LENGTH = 120;
+
 const projectCustomFieldsCache = new Map<string, any[]>();
 
 export function CaseDetailView({
@@ -129,6 +134,7 @@ export function CaseDetailView({
   const params = useParams();
   const { slug, caseId: urlCaseId } = params as Record<string, string>;
   const router = useRouter();
+  const prefersReducedMotion = useReducedMotion();
   const {
     project,
     modules,
@@ -1294,6 +1300,61 @@ export function CaseDetailView({
   // When a review is pending, all other users (non-requesters) are strictly locked out of editing
   const isLocked = Boolean(reviewStatus === 'pending' && !isAuthor);
 
+  // Edit-mode shortcuts: ⌘S saves, Esc discards (with confirmation when dirty).
+  useEffect(() => {
+    if (!isEditing || !canEdit || isLocked) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const withModifier = e.metaKey || e.ctrlKey;
+
+      if (withModifier && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!saving) void handleSaveChanges(true);
+        return;
+      }
+
+      if (e.key === 'Escape') {
+        // Let radix dialogs/popovers handle their own Escape first.
+        if (
+          confirmConfig?.open ||
+          showUnsavedPrompt ||
+          showDiffDialog ||
+          showSubmitReviewDialog ||
+          showRequestChangesDialog ||
+          showQuickCreateFieldModal ||
+          showExternalRunnerModal ||
+          showExternalLinkPrompt ||
+          Boolean(linkDialogProvider) ||
+          showOverflow
+        ) {
+          return;
+        }
+        e.preventDefault();
+        void handleCancel();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    isEditing,
+    canEdit,
+    isLocked,
+    saving,
+    confirmConfig?.open,
+    showUnsavedPrompt,
+    showDiffDialog,
+    showSubmitReviewDialog,
+    showRequestChangesDialog,
+    showQuickCreateFieldModal,
+    showExternalRunnerModal,
+    showExternalLinkPrompt,
+    linkDialogProvider,
+    showOverflow,
+    handleSaveChanges,
+    handleCancel,
+  ]);
+
   // Filter out empty/ghost steps when comparing local vs snapshot lengths
   const validLocalSteps = steps.filter(s => Boolean((s.step || '').trim() || (s.expected_result || (s as any).expectedResult || '').trim() || (s.data || '').trim()));
   const validSnapshotSteps = (reviewDiff?.after?.steps || []).filter((s: any) => Boolean((s.step || '').trim() || (s.expected_result || s.expectedResult || '').trim() || (s.data || '').trim()));
@@ -1690,7 +1751,7 @@ export function CaseDetailView({
     currentPostConditions !== originalPostConditions
   );
 
-  const handleSaveField = async (field: 'description' | 'preConditions' | 'postConditions') => {
+  const handleSaveField = async (field: 'title' | 'description' | 'preConditions' | 'postConditions') => {
     if (isLocked) {
       showLockedToast();
       return;
@@ -1698,7 +1759,15 @@ export function CaseDetailView({
 
     let label = 'Description';
     let payload: any = {};
-    if (field === 'description') {
+    if (field === 'title') {
+      label = 'Title';
+      const val = (draftState.title !== undefined ? draftState.title : (title || testCase?.title || '')).trim();
+      if (!val) {
+        toast.error('Title cannot be empty');
+        return;
+      }
+      payload = { title: val };
+    } else if (field === 'description') {
       label = 'Description';
       payload = { description: draftState.description !== undefined ? draftState.description : (testCase?.description || '') };
     } else if (field === 'preConditions') {
@@ -1872,6 +1941,25 @@ export function CaseDetailView({
   const displayTitle =
     draftState.title !== undefined ? draftState.title : title || testCase.title || '';
 
+  const currentModuleId = getValue('moduleId') || testCase?.moduleId || '';
+  const moduleBreadcrumb = (() => {
+    if (!currentModuleId) return [] as string[];
+    const byId = new Map<string, any>((modules || []).map((m: any) => [m.id, m]));
+    const path: string[] = [];
+    let current = byId.get(currentModuleId);
+    const seen = new Set<string>();
+    while (current && !seen.has(current.id) && path.length < 8) {
+      seen.add(current.id);
+      path.unshift(current.name || 'Module');
+      const parentId = current.parentId || current.parent_id;
+      current = parentId ? byId.get(parentId) : undefined;
+    }
+    return path;
+  })();
+
+  const titleLength = displayTitle.length;
+  const titleOverSoftLimit = titleLength > TITLE_SOFT_WARNING_LENGTH;
+
   const requestNavigatePrev = () => {
     if (hasChanges) {
       setConfirmConfig({
@@ -1907,199 +1995,53 @@ export function CaseDetailView({
       {/* Top Bar Header - Permanent Key + Title + Window Navigation */}
       <div
         className={cn(
-          "sticky z-30 min-h-[56px] py-2 bg-card/95 backdrop-blur-md border-b border-border/60 flex items-center",
+          "sticky z-30 bg-card/95 backdrop-blur-md border-b border-border/60",
           isFullPage ? "top-14" : "top-0"
         )}
         style={{ willChange: 'transform' }}
       >
-        <div className="case-detail-header px-4 md:px-6">
-          <div className="flex items-center gap-2.5 min-w-0">
-            {isFullPage && (
-              <button
-                type="button"
-                onClick={handleBack}
-                className="flex items-center justify-center p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0 cursor-pointer"
-                title="Back to Repository"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-            )}
-
-            <span className="font-mono text-xs sm:text-sm font-bold px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary border border-primary/25 shrink-0 select-all">
-              {testCase.displayId}
-            </span>
-          </div>
-
-          <div className="min-w-0">
-            {isEditing ? (
-                activeEditField === 'title' ? (
-                  <div className="flex items-center gap-1.5 w-full animate-in fade-in-0 duration-150">
-                    <input
-                      type="text"
-                      value={displayTitle}
-                      onChange={(e) => {
-                        setTitle(e.target.value);
-                        handleDraftChange('title', e.target.value);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          setActiveEditField(null);
-                          toast.success('Title updated');
-                        } else if (e.key === 'Escape') {
-                          setTitle(testCase.title);
-                          handleDraftChange('title', testCase.title);
-                          setActiveEditField(null);
-                        }
-                      }}
-                      className="flex-1 min-w-0 text-base sm:text-lg font-bold bg-muted/30 border border-primary/60 rounded-lg px-2.5 py-1 outline-none focus:border-primary text-foreground placeholder:text-muted-foreground"
-                      placeholder="Test case title..."
-                      autoFocus
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveEditField(null);
-                        toast.success('Title updated');
-                      }}
-                      className="h-7 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0 shadow-2xs"
-                      title="Save title"
-                    >
-                      <Check className="h-3.5 w-3.5" />
-                      <span>Save</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTitle(testCase.title);
-                        handleDraftChange('title', testCase.title);
-                        setActiveEditField(null);
-                      }}
-                      className="h-7 px-2 rounded-lg bg-muted hover:bg-muted/80 text-foreground text-xs font-medium flex items-center gap-1 cursor-pointer shrink-0"
-                      title="Cancel title edit"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ) : (
-                  <div
-                    onClick={() => setActiveEditField('title')}
-                    className="group cursor-pointer rounded-lg px-1.5 py-0.5 -mx-1.5 hover:bg-muted/40 transition-colors flex items-center gap-1.5 min-w-0"
-                    title="Click to edit title"
-                  >
-                    <h1
-                      className="case-detail-title case-detail-title-clamp flex-1 text-base sm:text-lg md:text-xl font-bold text-foreground leading-snug select-text"
-                      title={displayTitle}
-                    >
-                      {displayTitle}
-                    </h1>
-                    <Pencil className="h-3.5 w-3.5 opacity-0 group-hover:opacity-70 transition-opacity shrink-0 text-muted-foreground" />
-                  </div>
-                )
-              ) : (
-                <h1
-                  className="case-detail-title case-detail-title-clamp text-base sm:text-lg md:text-xl font-bold text-foreground leading-snug select-text"
-                  title={displayTitle}
+        <div className="case-detail-header px-4 md:px-6 py-2">
+          <div className="flex h-8 items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              {isFullPage && (
+                <button
+                  type="button"
+                  onClick={handleBack}
+                  className="flex items-center justify-center p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0 cursor-pointer"
+                  title="Back to Repository"
                 >
-                  {displayTitle}
-                </h1>
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
               )}
-          </div>
 
-          {/* Window & Navigation Controls + Primary Editorial Actions */}
-          <div className="case-detail-header-actions">
-            {(isEditing || hasChanges) ? (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="case-detail-edit-secondary h-8 text-xs font-semibold cursor-pointer"
-                  onClick={handleCancel}
-                  disabled={saving}
-                >
-                  <RotateCcw className="h-3 w-3 mr-1" />
-                  {hasChanges ? 'Discard' : 'Exit Edit'}
-                </Button>
-
-                {hasChanges && (
-                  reviewStatus === 'pending' ? (
-                    <Button
-                      size="sm"
-                      className="h-8 text-xs font-semibold shadow-xs cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground"
-                      onClick={handleSaveAndPushToReview}
-                      disabled={saving}
-                      title="Save changes and push to review snapshot"
-                    >
-                      <Send className="h-3.5 w-3.5 mr-1" />
-                      {saving ? 'Pushing...' : 'Push to Review'}
-                    </Button>
-                  ) : reviewStatus === 'changes_requested' ? (
-                    <Button
-                      size="sm"
-                      className="h-8 text-xs font-semibold shadow-xs cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground"
-                      onClick={handleSaveAndSendToReview}
-                      disabled={saving}
-                      title="Save revisions and resubmit for review"
-                    >
-                      <Send className="h-3.5 w-3.5 mr-1" />
-                      {saving ? 'Resubmitting...' : 'Resubmit for Review'}
-                    </Button>
-                  ) : status === 'draft' ? (
-                    <SplitButton
-                      label={saving ? 'Saving...' : (isAdmin || !reviewRequired ? 'Publish Changes' : 'Submit for Review')}
-                      icon={<Check className="h-3.5 w-3.5" />}
-                      onClick={() => handleSaveChanges(true)}
-                      disabled={saving}
-                      title="Publish or submit changes"
-                      items={[
-                        {
-                          label: 'Save as Draft',
-                          icon: <FileText className="h-3.5 w-3.5" />,
-                          onClick: handleSaveDraft,
-                          disabled: saving,
-                        },
-                      ]}
-                    />
-                  ) : (
-                    <SplitButton
-                      label={saving ? 'Saving...' : 'Save Changes'}
-                      icon={<Check className="h-3.5 w-3.5" />}
-                      onClick={() => handleSaveChanges(true)}
-                      disabled={saving}
-                      title="Save changes to active test case"
-                      items={[
-                        {
-                          label: 'Submit for Review',
-                          icon: <Send className="h-3.5 w-3.5" />,
-                          onClick: handleSaveAndSendToReview,
-                          disabled: saving,
-                        },
-                      ]}
-                    />
-                  )
-                )}
-              </>
-            ) : !canEdit ? (
-              <span className="case-detail-viewonly inline-flex items-center gap-1.5 h-8 px-3 rounded-xl bg-muted/40 border border-border/50 text-xs font-medium text-muted-foreground select-none">
-                <Eye className="h-3.5 w-3.5" />
-                <span>View Only</span>
+              <span className="font-mono text-xs sm:text-sm font-bold px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary border border-primary/25 shrink-0 select-all">
+                {testCase.displayId}
               </span>
-            ) : null}
 
-            {/* Animated Copy Link Button */}
-            <Tooltip content={copiedLink ? "Copied!" : "Copy link"} side="bottom" wrapperClassName="case-detail-header-secondary">
-              <button
-                type="button"
-                onClick={handleCopyLink}
-                className="p-1.5 rounded-lg hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-all duration-200 cursor-pointer inline-flex items-center justify-center"
-              >
-                {copiedLink ? (
-                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400 scale-110 animate-in zoom-in-75 duration-200" />
-                ) : (
-                  <LinkIcon className="h-4 w-4 transition-transform hover:scale-110" />
-                )}
-              </button>
-            </Tooltip>
+              {moduleBreadcrumb.length > 0 && (
+                <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                  <span className="text-muted-foreground/40" aria-hidden="true">›</span>
+                  <span className="min-w-0 truncate" title={moduleBreadcrumb.join(' / ')}>
+                    {moduleBreadcrumb.map((name, index) => (
+                      <span key={`${name}-${index}`}>
+                        {index > 0 && <span className="px-0.5 text-muted-foreground/40">/</span>}
+                        {name}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              )}
+
+              {!canEdit && (
+                <span className="case-detail-viewonly inline-flex items-center gap-1.5 h-6 px-2 rounded-md bg-muted/40 border border-border/50 text-[11px] font-medium text-muted-foreground select-none">
+                  <Eye className="h-3 w-3" />
+                  <span>View Only</span>
+                </span>
+              )}
+            </div>
+
+          {/* Window & Navigation Controls */}
+          <div className="case-detail-header-actions flex shrink-0 items-center gap-1">
 
             {/* Prev / Next controls for stepped master-detail browsing */}
             {(onNavigatePrev !== undefined || onNavigateNext !== undefined) && (
@@ -2131,6 +2073,21 @@ export function CaseDetailView({
                 </Tooltip>
               </div>
             )}
+
+            {/* Animated Copy Link Button */}
+            <Tooltip content={copiedLink ? "Copied!" : "Copy link"} side="bottom" wrapperClassName="case-detail-header-secondary">
+              <button
+                type="button"
+                onClick={handleCopyLink}
+                className="p-1.5 rounded-lg hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-all duration-200 cursor-pointer inline-flex items-center justify-center"
+              >
+                {copiedLink ? (
+                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400 scale-110 animate-in zoom-in-75 duration-200" />
+                ) : (
+                  <LinkIcon className="h-4 w-4 transition-transform hover:scale-110" />
+                )}
+              </button>
+            </Tooltip>
 
             {/* Case Actions Overflow Menu (Clone, Delete) */}
             <div
@@ -2228,19 +2185,6 @@ export function CaseDetailView({
                         >
                           <ChevronRight className="h-3.5 w-3.5" />
                           <span>Next case</span>
-                        </button>
-                      </div>
-                    )}
-
-                    {(isEditing || hasChanges) && (
-                      <div className="case-detail-overflow-edit flex-col">
-                        <button
-                          disabled={saving}
-                          onClick={() => { setShowOverflow(false); handleCancel(); }}
-                          className="w-full text-left px-3 py-2 hover:bg-muted text-foreground font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
-                        >
-                          <RotateCcw className="h-3.5 w-3.5" />
-                          <span>{hasChanges ? 'Discard changes' : 'Exit edit'}</span>
                         </button>
                       </div>
                     )}
@@ -2449,6 +2393,80 @@ export function CaseDetailView({
               </button>
             )}
           </div>
+          </div>
+
+          {/* Row 2: full-width title (grows only for this row) */}
+          <div className="min-w-0">
+              <div className="w-full">
+                {isEditing && !isLocked && canEdit && activeEditField === 'title' ? (
+                  <div>
+                    <div className="relative">
+                      <textarea
+                        ref={titleTextareaRef}
+                        value={displayTitle}
+                        onChange={(e) => {
+                          const nextTitle = e.target.value.replace(/[\r\n]+/g, ' ').slice(0, TITLE_MAX_LENGTH);
+                          setTitle(nextTitle);
+                          handleDraftChange('title', nextTitle);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter') return;
+                          e.preventDefault();
+                          if (!e.shiftKey) e.currentTarget.blur();
+                        }}
+                        rows={1}
+                        maxLength={TITLE_MAX_LENGTH}
+                        aria-label="Test case title"
+                        placeholder="Test case title..."
+                        className="w-full max-h-[5.25rem] resize-none overflow-y-auto rounded-lg border border-primary/40 bg-muted/20 px-2.5 py-1 pr-14 text-base sm:text-lg md:text-xl font-bold leading-snug text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus-visible:ring-1 focus-visible:ring-primary/30"
+                      />
+                      <span
+                        className={cn(
+                          'absolute bottom-1 right-2 flex items-center h-[calc(100%-0.5rem)] text-[10px] font-mono tabular-nums',
+                          titleOverSoftLimit
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-muted-foreground'
+                        )}
+                      >
+                        {titleLength}/{TITLE_MAX_LENGTH}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-[11px]">
+                      <span
+                        className={cn(
+                          'truncate',
+                          titleOverSoftLimit
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'select-none text-transparent'
+                        )}
+                        aria-live="polite"
+                      >
+                        {titleOverSoftLimit ? 'Long titles may be truncated in lists.' : '.'}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <h1
+                    onClick={() => {
+                      if (isLocked) {
+                        showLockedToast();
+                        return;
+                      }
+                      if (!canEdit) return;
+                      if (!isEditing) setIsEditing(true);
+                      setActiveEditField('title');
+                    }}
+                    className={cn(
+                      "case-detail-title line-clamp-2 break-words text-base sm:text-lg md:text-xl font-bold leading-snug text-foreground select-text",
+                      canEdit && !isLocked ? "cursor-pointer hover:underline decoration-dashed decoration-muted-foreground/40 underline-offset-4" : ""
+                    )}
+                    title={displayTitle}
+                  >
+                    {displayTitle}
+                  </h1>
+                )}
+              </div>
+          </div>
         </div>
       </div>
 
@@ -2501,7 +2519,7 @@ export function CaseDetailView({
               !isEditing && isAuthor && hasWorkingEdits ? (
                 <Button
                   size="sm"
-                  className="h-8 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 px-3.5"
+                  className="h-8 text-xs font-semibold gradient-btn text-white rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 px-3.5"
                   onClick={handleUpdateReviewSnapshot}
                   disabled={saving}
                   title="Push unsubmitted working edits to the active review snapshot"
@@ -2514,7 +2532,7 @@ export function CaseDetailView({
               !isEditing ? (
                 <Button
                   size="sm"
-                  className="h-8 text-xs bg-primary text-primary-foreground font-semibold cursor-pointer shadow-xs"
+                  className="h-8 text-xs gradient-btn text-white font-semibold cursor-pointer shadow-xs"
                   onClick={handleOpenSubmitReviewModal}
                 >
                   <Send className="h-3 w-3 mr-1" /> Resubmit for Review
@@ -2526,7 +2544,7 @@ export function CaseDetailView({
                   <>
                     <Button
                       size="sm"
-                      className="h-7 text-xs bg-primary text-primary-foreground font-medium shadow-xs cursor-pointer"
+                      className="h-7 text-xs gradient-btn text-white font-medium shadow-xs cursor-pointer"
                       onClick={handleOpenSubmitReviewModal}
                     >
                       <Send className="h-3 w-3 mr-1" /> Submit for Review
@@ -3035,7 +3053,7 @@ export function CaseDetailView({
                                 handleCustomFieldChange(def.key, (customTextInputs[def.key] ?? '').trim());
                                 setOpenPill(null);
                               }}
-                              className="px-2.5 py-1 text-[11px] bg-primary text-primary-foreground rounded-md font-semibold cursor-pointer"
+                              className="px-2.5 py-1 text-[11px] gradient-btn text-white rounded-md font-semibold cursor-pointer"
                             >
                               Save
                             </button>
@@ -3079,7 +3097,7 @@ export function CaseDetailView({
                                 handleCustomFieldChange(def.key, isNaN(num) ? undefined : num);
                                 setOpenPill(null);
                               }}
-                              className="px-2.5 py-1 text-[11px] bg-primary text-primary-foreground rounded-md font-semibold cursor-pointer"
+                              className="px-2.5 py-1 text-[11px] gradient-btn text-white rounded-md font-semibold cursor-pointer"
                             >
                               Save
                             </button>
@@ -3094,7 +3112,7 @@ export function CaseDetailView({
                           <input
                             type="url"
                             autoFocus
-                            maxLength={255}
+                            maxLength={100}
                             value={customTextInputs[def.key] ?? String(val || '')}
                             onChange={(e) =>
                               setCustomTextInputs((prev) => ({ ...prev, [def.key]: e.target.value }))
@@ -3122,7 +3140,7 @@ export function CaseDetailView({
                                 handleCustomFieldChange(def.key, (customTextInputs[def.key] ?? '').trim());
                                 setOpenPill(null);
                               }}
-                              className="px-2.5 py-1 text-[11px] bg-primary text-primary-foreground rounded-md font-semibold cursor-pointer"
+                              className="px-2.5 py-1 text-[11px] gradient-btn text-white rounded-md font-semibold cursor-pointer"
                             >
                               Save
                             </button>
@@ -3405,7 +3423,7 @@ export function CaseDetailView({
                           }
                         }}
                         disabled={!ticketKeyInput.trim()}
-                        className="px-2.5 py-1 text-[11px] bg-primary text-primary-foreground rounded-md font-semibold disabled:opacity-50 cursor-pointer"
+                        className="px-2.5 py-1 text-[11px] gradient-btn text-white rounded-md font-semibold disabled:opacity-50 cursor-pointer"
                       >
                         Save
                       </button>
@@ -3523,24 +3541,17 @@ export function CaseDetailView({
               </TabsTrigger>
             </TabsList>
 
-              {/* Edit / Exit Edit (body-level action, replaces the old header button) */}
-              {canEdit && (isEditing || hasChanges) ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs font-semibold border-border hover:bg-muted cursor-pointer flex items-center gap-1.5"
-                  onClick={handleCancel}
-                  disabled={saving}
-                >
-                  <RotateCcw className="h-3.5 w-3.5 text-primary" />
-                  <span>{hasChanges ? 'Discard' : 'Exit Edit'}</span>
-                </Button>
-              ) : canEdit ? (
+              {/* Single edit toggle. Discard/Save live in the sticky action bar. */}
+              {canEdit && (
                 <Button
                   size="sm"
                   variant="outline"
                   className="h-8 text-xs font-semibold border-border hover:bg-muted cursor-pointer flex items-center gap-1.5"
                   onClick={() => {
+                    if (isEditing) {
+                      void handleCancel();
+                      return;
+                    }
                     if (isLocked) {
                       showLockedToast();
                       return;
@@ -3548,11 +3559,16 @@ export function CaseDetailView({
                     // Stay in the current presentation (drawer stays a drawer).
                     setIsEditing(true);
                   }}
+                  disabled={saving && isEditing}
                 >
-                  <Edit3 className="h-3.5 w-3.5 text-primary" />
-                  <span>Edit Test Case</span>
+                  {isEditing ? (
+                    <X className="h-3.5 w-3.5 text-primary" />
+                  ) : (
+                    <Edit3 className="h-3.5 w-3.5 text-primary" />
+                  )}
+                  <span>{isEditing ? 'Exit Edit' : 'Edit Test Case'}</span>
                 </Button>
-              ) : null}
+              )}
             </div>
 
           <TabsContent value="steps" className="space-y-4 mt-4">
@@ -3607,9 +3623,9 @@ export function CaseDetailView({
                     <div className="p-3 space-y-2.5">
                       {isEditing ? (
                         activeEditField === 'description' ? (
-                          <div className="space-y-2 animate-in fade-in-0 duration-150">
+                            <div className="space-y-2 animate-in fade-in-0 duration-150">
                             <Textarea
-                              value={cleanedDescText}
+                              value={getValue('description') !== undefined ? getValue('description') : (testCase?.description || '')}
                               onChange={(e) => handleDraftChange('description', e.target.value)}
                               placeholder="Provide background information, acceptance criteria, or context for this test case..."
                               rows={3}
@@ -3619,20 +3635,21 @@ export function CaseDetailView({
                             <div className="flex items-center gap-1.5 justify-end">
                               <button
                                 type="button"
-                                onClick={() => {
+                                onClick={async () => {
+                                  await handleSaveField('description');
                                   setActiveEditField(null);
-                                  toast.success('Description saved');
                                 }}
-                                className="h-6 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs"
+                                disabled={savingField === 'description'}
+                                className="h-6 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs disabled:opacity-50"
                                 title="Save description"
                               >
                                 <Check className="h-3 w-3" />
-                                <span>Save</span>
+                                <span>{savingField === 'description' ? 'Saving...' : 'Save'}</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={() => {
-                                  handleDraftChange('description', testCase.description || '');
+                                  handleCancelField('description');
                                   setActiveEditField(null);
                                 }}
                                 className="h-6 px-2 rounded-lg bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground text-xs font-medium flex items-center gap-1 cursor-pointer"
@@ -3645,9 +3662,20 @@ export function CaseDetailView({
                           </div>
                         ) : (
                           <div
-                            onClick={() => setActiveEditField('description')}
-                            className="group cursor-pointer rounded-xl p-2 -m-1 hover:bg-muted/30 transition-colors flex items-start justify-between"
-                            title="Click to edit description"
+                            onClick={() => {
+                              if (isLocked) {
+                                showLockedToast();
+                                return;
+                              }
+                              if (!canEdit) return;
+                              if (!isEditing) setIsEditing(true);
+                              setActiveEditField('description');
+                            }}
+                            className={cn(
+                              "group rounded-xl p-2 -m-1 flex items-start justify-between",
+                              canEdit && !isLocked ? "cursor-pointer hover:bg-muted/30 transition-colors" : ""
+                            )}
+                            title={canEdit && !isLocked ? "Click to edit description" : undefined}
                           >
                             <div className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap flex-1 select-text">
                               {cleanedDescText ? (
@@ -3657,10 +3685,14 @@ export function CaseDetailView({
                                   parameters={enrichedCaseParameters}
                                 />
                               ) : (
-                                <span className="text-muted-foreground/60 italic font-normal">Click to add description...</span>
+                                <span className="text-muted-foreground/60 italic font-normal">
+                                  {canEdit && !isLocked ? "Click to add description..." : "No description provided"}
+                                </span>
                               )}
                             </div>
-                            <Pencil className="h-3.5 w-3.5 opacity-0 group-hover:opacity-60 transition-opacity ml-2 shrink-0 text-muted-foreground mt-0.5" />
+                            {canEdit && !isLocked && (
+                              <Pencil className="h-3.5 w-3.5 opacity-0 group-hover:opacity-60 transition-opacity ml-2 shrink-0 text-muted-foreground mt-0.5" />
+                            )}
                           </div>
                         )
                       ) : (
@@ -3902,55 +3934,65 @@ export function CaseDetailView({
                 <div className="p-3">
                   {isEditing ? (
                     activeEditField === 'preConditions' ? (
-                      <div className="space-y-2 animate-in fade-in-0 duration-150">
-                        <VariableAutocomplete
-                          value={getValue('preConditions') || getValue('pre_conditions') || ''}
-                          onChange={(value) => {
-                            handleDraftChange('preConditions', value);
-                            handleDraftChange('pre_conditions', value);
-                          }}
-                          placeholder="e.g. User account is verified; Device is on Wi-Fi; Test data is seeded..."
-                          className="text-xs border-primary/50 focus:border-primary"
-                          variables={allVariables}
-                          parameters={enrichedCaseParameters}
-                          onCreateParameter={handleCreateInlineParameter}
-                          multiline
-                          autoFocus
-                        />
-                        <div className="flex items-center gap-1.5 justify-end">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveEditField(null);
-                              toast.success('Pre-conditions saved');
+                        <div className="space-y-2 animate-in fade-in-0 duration-150">
+                          <VariableAutocomplete
+                            value={getValue('preConditions') || getValue('pre_conditions') || ''}
+                            onChange={(value) => {
+                              handleDraftChange('preConditions', value);
+                              handleDraftChange('pre_conditions', value);
                             }}
-                            className="h-6 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs"
-                            title="Save pre-conditions"
-                          >
-                            <Check className="h-3 w-3" />
-                            <span>Save</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const orig = testCase.preConditions || testCase.pre_conditions || '';
-                              handleDraftChange('preConditions', orig);
-                              handleDraftChange('pre_conditions', orig);
-                              setActiveEditField(null);
-                            }}
-                            className="h-6 px-2 rounded-lg bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground text-xs font-medium flex items-center gap-1 cursor-pointer"
-                            title="Cancel"
-                          >
-                            <X className="h-3 w-3" />
-                            <span>Cancel</span>
-                          </button>
+                            placeholder="e.g. User account is verified; Device is on Wi-Fi; Test data is seeded..."
+                            className="text-xs border-primary/50 focus:border-primary"
+                            variables={allVariables}
+                            parameters={enrichedCaseParameters}
+                            onCreateParameter={handleCreateInlineParameter}
+                            multiline
+                            autoFocus
+                          />
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await handleSaveField('preConditions');
+                                setActiveEditField(null);
+                              }}
+                              disabled={savingField === 'preConditions'}
+                              className="h-6 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs disabled:opacity-50"
+                              title="Save pre-conditions"
+                            >
+                              <Check className="h-3 w-3" />
+                              <span>{savingField === 'preConditions' ? 'Saving...' : 'Save'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleCancelField('preConditions');
+                                setActiveEditField(null);
+                              }}
+                              className="h-6 px-2 rounded-lg bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground text-xs font-medium flex items-center gap-1 cursor-pointer"
+                              title="Cancel"
+                            >
+                              <X className="h-3 w-3" />
+                              <span>Cancel</span>
+                            </button>
+                          </div>
                         </div>
-                      </div>
                     ) : (
                       <div
-                        onClick={() => setActiveEditField('preConditions')}
-                        className="group cursor-pointer rounded-xl p-2 -m-1 hover:bg-muted/30 transition-colors flex items-start justify-between"
-                        title="Click to edit pre-conditions"
+                        onClick={() => {
+                          if (isLocked) {
+                            showLockedToast();
+                            return;
+                          }
+                          if (!canEdit) return;
+                          if (!isEditing) setIsEditing(true);
+                          setActiveEditField('preConditions');
+                        }}
+                        className={cn(
+                          "group rounded-xl p-2 -m-1 flex items-start justify-between",
+                          canEdit && !isLocked ? "cursor-pointer hover:bg-muted/30 transition-colors" : ""
+                        )}
+                        title={canEdit && !isLocked ? "Click to edit pre-conditions" : undefined}
                       >
                         <div className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap flex-1 select-text">
                           {getValue('preConditions') || getValue('pre_conditions') ? (
@@ -3960,10 +4002,14 @@ export function CaseDetailView({
                               parameters={enrichedCaseParameters}
                             />
                           ) : (
-                            <span className="text-muted-foreground/60 italic font-normal">Click to add pre-conditions...</span>
+                            <span className="text-muted-foreground/60 italic font-normal">
+                              {canEdit && !isLocked ? "Click to add pre-conditions..." : "No pre-conditions specified"}
+                            </span>
                           )}
                         </div>
-                        <Pencil className="h-3.5 w-3.5 opacity-0 group-hover:opacity-60 transition-opacity ml-2 shrink-0 text-muted-foreground mt-0.5" />
+                        {canEdit && !isLocked && (
+                          <Pencil className="h-3.5 w-3.5 opacity-0 group-hover:opacity-60 transition-opacity ml-2 shrink-0 text-muted-foreground mt-0.5" />
+                        )}
                       </div>
                     )
                   ) : (
@@ -4207,55 +4253,65 @@ export function CaseDetailView({
                 <div className="p-3">
                   {isEditing ? (
                     activeEditField === 'postConditions' ? (
-                      <div className="space-y-2 animate-in fade-in-0 duration-150">
-                        <VariableAutocomplete
-                          placeholder="e.g. User account is logged out; Test session is closed; Seeded database records are deleted..."
-                          value={getValue('postConditions') || getValue('post_conditions') || ''}
-                          onChange={(value) => {
-                            handleDraftChange('postConditions', value);
-                            handleDraftChange('post_conditions', value);
-                          }}
-                          className="text-xs border-primary/50 focus:border-primary"
-                          variables={allVariables}
-                          parameters={enrichedCaseParameters}
-                          onCreateParameter={handleCreateInlineParameter}
-                          multiline
-                          autoFocus
-                        />
-                        <div className="flex items-center gap-1.5 justify-end">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveEditField(null);
-                              toast.success('Post-conditions saved');
+                        <div className="space-y-2 animate-in fade-in-0 duration-150">
+                          <VariableAutocomplete
+                            placeholder="e.g. User account is logged out; Test session is closed; Seeded database records are deleted..."
+                            value={getValue('postConditions') || getValue('post_conditions') || ''}
+                            onChange={(value) => {
+                              handleDraftChange('postConditions', value);
+                              handleDraftChange('post_conditions', value);
                             }}
-                            className="h-6 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs"
-                            title="Save post-conditions"
-                          >
-                            <Check className="h-3 w-3" />
-                            <span>Save</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const orig = testCase.postConditions || testCase.post_conditions || '';
-                              handleDraftChange('postConditions', orig);
-                              handleDraftChange('post_conditions', orig);
-                              setActiveEditField(null);
-                            }}
-                            className="h-6 px-2 rounded-lg bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground text-xs font-medium flex items-center gap-1 cursor-pointer"
-                            title="Cancel"
-                          >
-                            <X className="h-3 w-3" />
-                            <span>Cancel</span>
-                          </button>
+                            className="text-xs border-primary/50 focus:border-primary"
+                            variables={allVariables}
+                            parameters={enrichedCaseParameters}
+                            onCreateParameter={handleCreateInlineParameter}
+                            multiline
+                            autoFocus
+                          />
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await handleSaveField('postConditions');
+                                setActiveEditField(null);
+                              }}
+                              disabled={savingField === 'postConditions'}
+                              className="h-6 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs disabled:opacity-50"
+                              title="Save post-conditions"
+                            >
+                              <Check className="h-3 w-3" />
+                              <span>{savingField === 'postConditions' ? 'Saving...' : 'Save'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleCancelField('postConditions');
+                                setActiveEditField(null);
+                              }}
+                              className="h-6 px-2 rounded-lg bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground text-xs font-medium flex items-center gap-1 cursor-pointer"
+                              title="Cancel"
+                            >
+                              <X className="h-3 w-3" />
+                              <span>Cancel</span>
+                            </button>
+                          </div>
                         </div>
-                      </div>
                     ) : (
                       <div
-                        onClick={() => setActiveEditField('postConditions')}
-                        className="group cursor-pointer rounded-xl p-2 -m-1 hover:bg-muted/30 transition-colors flex items-start justify-between"
-                        title="Click to edit post-conditions"
+                        onClick={() => {
+                          if (isLocked) {
+                            showLockedToast();
+                            return;
+                          }
+                          if (!canEdit) return;
+                          if (!isEditing) setIsEditing(true);
+                          setActiveEditField('postConditions');
+                        }}
+                        className={cn(
+                          "group rounded-xl p-2 -m-1 flex items-start justify-between",
+                          canEdit && !isLocked ? "cursor-pointer hover:bg-muted/30 transition-colors" : ""
+                        )}
+                        title={canEdit && !isLocked ? "Click to edit post-conditions" : undefined}
                       >
                         <div className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap flex-1 select-text">
                           {getValue('postConditions') || getValue('post_conditions') ? (
@@ -4265,10 +4321,14 @@ export function CaseDetailView({
                               parameters={enrichedCaseParameters}
                             />
                           ) : (
-                            <span className="text-muted-foreground/60 italic font-normal">Click to add post-conditions...</span>
+                            <span className="text-muted-foreground/60 italic font-normal">
+                              {canEdit && !isLocked ? "Click to add post-conditions..." : "No post-conditions specified"}
+                            </span>
                           )}
                         </div>
-                        <Pencil className="h-3.5 w-3.5 opacity-0 group-hover:opacity-60 transition-opacity ml-2 shrink-0 text-muted-foreground mt-0.5" />
+                        {canEdit && !isLocked && (
+                          <Pencil className="h-3.5 w-3.5 opacity-0 group-hover:opacity-60 transition-opacity ml-2 shrink-0 text-muted-foreground mt-0.5" />
+                        )}
                       </div>
                     )
                   ) : (
@@ -4421,7 +4481,7 @@ export function CaseDetailView({
                                 <Link
                                   href={`/p/${slug}/runs/${r.runId}?caseId=${testCase.displayId}`}
                                   onClick={(e) => e.stopPropagation()}
-                                  className="font-semibold text-foreground hover:text-primary transition-colors truncate block text-xs hover:underline"
+                                  className="font-semibold text-foreground hover:text-primary transition-colors truncate block text-xs"
                                   title={r.runName || 'Test Run'}
                                 >
                                   {r.runName || 'Test Run'}
@@ -4702,14 +4762,14 @@ export function CaseDetailView({
                               href={b.ticketUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="font-medium text-foreground hover:text-primary transition-colors truncate block text-xs hover:underline"
+                              className="font-medium text-foreground hover:text-primary transition-colors truncate block text-xs"
                             >
                               {b.title}
                             </a>
                           ) : (
                             <Link
                               href={`/p/${slug}/defects?search=${b.externalTicketId || b.id}`}
-                              className="font-medium text-foreground hover:text-primary transition-colors truncate block text-xs hover:underline"
+                              className="font-medium text-foreground hover:text-primary transition-colors truncate block text-xs"
                             >
                               {b.title}
                             </Link>
@@ -4717,7 +4777,7 @@ export function CaseDetailView({
                           {b.runName && (
                             <Link
                               href={`/p/${slug}/runs/${b.runId}?caseId=${testCase.displayId}`}
-                              className="text-[11px] text-muted-foreground hover:text-primary transition-colors truncate block mt-0.5 hover:underline"
+                              className="text-[11px] text-muted-foreground hover:text-primary transition-colors truncate block mt-0.5"
                             >
                               Run: {b.runName} {b.environment ? `(${b.environment})` : ''}
                             </Link>
@@ -4989,6 +5049,107 @@ export function CaseDetailView({
         </Tabs>
       </div>
 
+      {/* Sticky edit action bar — the single place for discard/save while editing. */}
+      <AnimatePresence initial={false}>
+        {isEditing && canEdit && (
+          <motion.div
+            key="case-detail-action-bar"
+            initial={prefersReducedMotion ? false : { y: 24, opacity: 0 }}
+            animate={prefersReducedMotion ? {} : { y: 0, opacity: 1 }}
+            exit={prefersReducedMotion ? {} : { y: 24, opacity: 0 }}
+            transition={prefersReducedMotion ? { duration: 0 } : MOTION.spring.drawer}
+            role="region"
+            aria-label="Case edit actions"
+            className="sticky bottom-0 z-40 border-t border-border/60 bg-card/95 px-4 py-2.5 backdrop-blur-md sm:px-6 md:px-8"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-muted-foreground">
+                {hasChanges && (
+                  <>
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
+                    <span className="truncate">Unsaved changes</span>
+                  </>
+                )}
+              </div>
+
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs font-semibold cursor-pointer"
+                  onClick={handleCancel}
+                  disabled={saving || !hasChanges}
+                  title={hasChanges ? 'Discard changes' : 'No unsaved changes'}
+                >
+                  <RotateCcw className="h-3 w-3 mr-1" />
+                  Discard
+                </Button>
+
+                {hasChanges && (
+                  reviewStatus === 'pending' ? (
+                    <Button
+                      size="sm"
+                      className="h-8 text-xs font-semibold shadow-xs cursor-pointer gradient-btn text-white"
+                      onClick={handleSaveAndPushToReview}
+                      disabled={saving}
+                      title="Save changes and push to review snapshot"
+                    >
+                      <Send className="h-3.5 w-3.5 mr-1" />
+                      {saving ? 'Pushing...' : 'Push to Review'}
+                    </Button>
+                  ) : reviewStatus === 'changes_requested' ? (
+                    <Button
+                      size="sm"
+                      className="h-8 text-xs font-semibold shadow-xs cursor-pointer gradient-btn text-white"
+                      onClick={handleSaveAndSendToReview}
+                      disabled={saving}
+                      title="Save revisions and resubmit for review"
+                    >
+                      <Send className="h-3.5 w-3.5 mr-1" />
+                      {saving ? 'Resubmitting...' : 'Resubmit for Review'}
+                    </Button>
+                  ) : status === 'draft' ? (
+                    <SplitButton
+                      label={saving ? 'Saving...' : (isAdmin || !reviewRequired ? 'Publish Changes' : 'Submit for Review')}
+                      icon={<Check className="h-3.5 w-3.5" />}
+                      onClick={() => handleSaveChanges(true)}
+                      disabled={saving}
+                      title="Publish or submit changes"
+                      menuPlacement="top"
+                      items={[
+                        {
+                          label: 'Save as Draft',
+                          icon: <FileText className="h-3.5 w-3.5" />,
+                          onClick: handleSaveDraft,
+                          disabled: saving,
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <SplitButton
+                      label={saving ? 'Saving...' : 'Save Changes'}
+                      icon={<Check className="h-3.5 w-3.5" />}
+                      onClick={() => handleSaveChanges(true)}
+                      disabled={saving}
+                      title="Save changes to active test case"
+                      menuPlacement="top"
+                      items={[
+                        {
+                          label: 'Submit for Review',
+                          icon: <Send className="h-3.5 w-3.5" />,
+                          onClick: handleSaveAndSendToReview,
+                          disabled: saving,
+                        },
+                      ]}
+                    />
+                  )
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       
       
 
@@ -5088,7 +5249,7 @@ export function CaseDetailView({
               {reviewStatus === 'pending' && isAuthor && hasWorkingEdits && (
                 <Button
                   size="sm"
-                  className="h-8 text-xs bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-xs cursor-pointer"
+                  className="h-8 text-xs gradient-btn text-white font-semibold shadow-xs cursor-pointer"
                   onClick={async () => {
                     await handleUpdateReviewSnapshot();
                     setShowDiffDialog(false);
@@ -5270,7 +5431,7 @@ export function CaseDetailView({
             </Button>
             <Button
               size="sm"
-              className="bg-primary text-primary-foreground"
+              className="gradient-btn text-white"
               onClick={async () => {
                 if (status === 'active' && reviewRequired && !isAdmin) {
                   setShowUnsavedPrompt(false);

@@ -5,10 +5,13 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ResultStatusBadge } from '@/components/common/ResultStatusBadge';
-import { AlertTriangle, Bug, Clock, Copy, Database, ExternalLink, Printer, RotateCcw, ChevronDown, ChevronRight, CalendarDays, Users } from 'lucide-react';
+import { AlertTriangle, Bug, Clock, Copy, Database, ExternalLink, Printer, RotateCcw, ChevronDown, ChevronRight, CalendarDays, Users, ShieldAlert, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { ResultStatus } from '@/lib/types';
+import { ProgressCircle } from '@/components/common/ProgressCircle';
+import { createRunReportShare, revokeRunReportShare, type ShareExpiry } from '@/app/actions/report-shares';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 
 interface DefectMini {
   id: string;
@@ -107,6 +110,50 @@ const [statusFilter, setStatusFilter] = useState<null | 'fail' | 'error' | 'bloc
   const setFilter = (v: string | null) => setStatusFilter(v === 'fail' ? 'fail' : v === 'error' ? 'error' : v === 'blocked' ? 'blocked' : v === 'invalid' ? 'invalid' : null);
   const [showAttempts, setShowAttempts] = useState(false);
 
+  // ---- Share link state
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareExpiry, setShareExpiry] = useState<ShareExpiry>("7d");
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareExpiresAt, setShareExpiresAt] = useState<Date | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+
+  const handleCreateShare = async () => {
+    setShareLoading(true);
+    setShareError(null);
+    try {
+      const res = await createRunReportShare(runId, shareExpiry);
+      if (res.ok) {
+        setShareToken(res.token ?? null);
+        setShareUrl(res.url ?? null);
+        setShareExpiresAt((res.expiresAt ?? null) as Date | null);
+      } else {
+        setShareError((res.error ?? null) as string | null);
+      }
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const handleRevokeShare = async () => {
+    setShareLoading(true);
+    try {
+      await revokeRunReportShare(runId);
+      setShareToken(null);
+      setShareUrl(null);
+      setShareExpiresAt(null);
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const handleCopyShareUrl = async () => {
+    if (!shareUrl) return;
+    await navigator.clipboard.writeText(shareUrl);
+    toast.success("Share link copied");
+  };
+
   if (error || !data || !data.run) {
     return (
       <div className="min-h-screen flex items-center justify-center font-sans">
@@ -166,6 +213,10 @@ const [statusFilter, setStatusFilter] = useState<null | 'fail' | 'error' | 'bloc
   const duration = durationMs ? formatDuration(durationMs / 1000) : null;
   const executionTotalSeconds = results.reduce((s, r) => s + (r.totalTimeSpentSeconds || 0), 0);
 
+  // ---- In-progress detection
+  const pendingCount = results.filter((r) => r.status === 'pending' || r.status === 'queued' || r.status === 'running').length;
+  const isRunInProgress = pendingCount > 0 && (run.status?.toLowerCase() !== 'completed' && run.status?.toLowerCase() !== 'aborted');
+
   // ---- Attention items: failed / blocked / error / invalid
   const attentionItems = useMemo(
     () => results.filter((r) => isFailedResultStatus(r.status) || r.status === 'blocked' || r.status === 'invalid'),
@@ -222,7 +273,7 @@ const [statusFilter, setStatusFilter] = useState<null | 'fail' | 'error' | 'bloc
 
   return (
     <div className="font-sans text-foreground bg-background min-h-screen print:bg-white print:text-black">
-      <style jsx global>{`
+        <style jsx global>{`
         @media print {
           @page { size: A4 portrait; margin: 8mm 10mm; }
           body { background: #fff !important; color: #000 !important; }
@@ -234,6 +285,7 @@ const [statusFilter, setStatusFilter] = useState<null | 'fail' | 'error' | 'bloc
           .print-header { position: fixed; top: 0; left: 0; right: 0; border-bottom: 1px solid #e2e8f0; padding: 4mm 10mm; font-size: 8px; color: #000; }
           .print-page-number:after { content: counter(page); }
           .print-page-count:after { content: counter(pages); }
+          .draft-watermark { position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 120px; font-weight: 900; color: #ef4444; opacity: 0.10; pointer-events: none; z-index: 50; white-space: nowrap; }
         }
         @page { margin: 8mm 10mm; }
       `}</style>
@@ -267,8 +319,17 @@ const [statusFilter, setStatusFilter] = useState<null | 'fail' | 'error' | 'bloc
 
       {/* ── Main content */}
       <main className="px-4 py-4 print:px-0 print:py-0 max-w-5xl mx-auto space-y-4 print:space-y-3">
+        {isRunInProgress && (
+          <div className="draft-watermark print:block hidden">Draft</div>
+        )}
         {/* Title block */}
         <section className="print-shadow-none space-y-2.5 print:space-y-1.5">
+          {isRunInProgress && (
+            <div className="print-hidden mb-1 p-2.5 rounded-lg border border-amber-200/60 bg-amber-50 text-[11px] font-medium text-amber-700 flex items-center gap-2 shrink-0">
+              <Clock className="h-3.5 w-3.5 animate-pulse shrink-0" />
+              <span className="shrink-0">In progress · snapshot at {fmtDateTime(new Date())} · {pendingCount} pending</span>
+            </div>
+          )}
           <div className="flex items-center gap-2.5 flex-wrap">
             <h1 className="text-xl font-bold text-foreground print:text-black">{run.name}</h1>
             <ResultStatusWithBadge label={effectiveResult} color={resultBadgeColor(effectiveResult)} />
@@ -305,17 +366,36 @@ const [statusFilter, setStatusFilter] = useState<null | 'fail' | 'error' | 'bloc
 
         {/* Copy link / Print buttons (slim) */}
         <div className="print:hidden flex items-center gap-2 justify-end print-hidden">
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { navigator.clipboard.writeText(window.location.href); toast.success('Report link copied'); }}>
-            <Copy className="h-3.5 w-3.5 mr-1.5" /> Copy link
-          </Button>
-          <Button size="sm" className="h-7 gradient-btn text-white" onClick={() => window.print()}>
-            <Printer className="h-3.5 w-3.5 mr-1.5" /> Print (PDF)
-          </Button>
+          {isInternal ? (
+            <>
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setShareOpen(true)}>
+                <ShieldAlert className="h-3.5 w-3.5 mr-1.5" /> Share link
+              </Button>
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { navigator.clipboard.writeText(window.location.href); toast.success('Report link copied'); }}>
+                <Copy className="h-3.5 w-3.5 mr-1.5" /> Copy link
+              </Button>
+              <Button size="sm" className="h-7 gradient-btn text-white" onClick={() => window.print()}>
+                <Printer className="h-3.5 w-3.5 mr-1.5" /> Print (PDF)
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="text-[10px] font-medium text-muted-foreground shrink-0">Shared link</span>
+              {shareToken && (
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleCopyShareUrl} disabled={shareLoading}>
+                  {shareLoading ? <RefreshCw className="h-3 w-3 mr-1.5 animate-spin" /> : <Copy className="h-3.5 w-3.5 mr-1.5" />} Copy link
+                </Button>
+              )}
+              <Button size="sm" className="h-7 gradient-btn text-white" onClick={() => window.print()}>
+                <Printer className="h-3.5 w-3.5 mr-1.5" /> Print (PDF)
+              </Button>
+            </>
+          )}
         </div>
 
         {/* Summary: pass rate ring + stat tiles */}
         <section className="print-shadow-none grid gap-4 md:grid-cols-[220px_1fr] print:grid-cols-[180px_1fr]">
-          <PassRateRing passRate={passRate} passed={stats.pass} denom={passRateDenom} />
+          <PassRateRing passRate={passRate} passed={stats.pass} denom={passRateDenom} isRunInProgress={isRunInProgress} total={stats.total} />
           <StatTiles stats={stats} />
         </section>
 
@@ -366,6 +446,68 @@ const [statusFilter, setStatusFilter] = useState<null | 'fail' | 'error' | 'bloc
           <span>Shared link</span>
           <span>Expires {run.expiresAt ? fmtDate(new Date(run.expiresAt)) : 'Never'}</span>
         </footer>
+      )}
+
+      {/* Share dialog (internal viewers) */}
+      <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+        <DialogContent className="max-w-md sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Share report link</DialogTitle>
+            <DialogDescription>
+              Create a revocable, read-only link. Anyone with the link can view the report without logging in.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <div className="flex items-center gap-2">
+              {(["7d","30d","never"] as const).map((e) => (
+                <Button key={e} variant={shareExpiry === e ? "default" : "outline"} size="sm" onClick={() => setShareExpiry(e)}>
+                  {e === "never" ? "Never" : e + " days"}
+                </Button>
+              ))}
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setShareOpen(false)} disabled={shareLoading}>
+              Cancel
+            </Button>
+            <Button disabled={shareLoading} onClick={handleCreateShare}>
+              {shareLoading ? "Creating…" : "Create link"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {shareToken && (
+        <Dialog open={true} onOpenChange={() => {}}>
+          <DialogContent className="max-w-md sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Share link ready</DialogTitle>
+            </DialogHeader>
+            <DialogDescription>
+              <div className="flex items-center gap-2 mb-2">
+                <input
+                  readOnly
+                  value={shareUrl || ""}
+                  className="flex-1 text-xs font-mono text-muted-foreground bg-muted rounded px-2 py-1.5"
+                />
+                <Button variant="outline" size="sm" onClick={handleCopyShareUrl} disabled={shareLoading}>
+                  {shareLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Copy className="h-3 w-3" />}
+                </Button>
+              </div>
+              <div className="text-xs text-muted-foreground mb-2">
+                Expires: {shareExpiresAt ? fmtDateTime(shareExpiresAt) : "Never"} · Read-only
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Anyone with this link can view the report without logging in. Raw request/response bodies,
+                variables and secrets are hidden unless the viewer turns on "Include details".
+              </p>
+            </DialogDescription>
+            <DialogFooter>
+              <Button variant="outline" size="sm" onClick={handleRevokeShare} className="text-rose-600 hover:bg-rose-50">
+                Revoke link
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setShareOpen(false)}>Done</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );
@@ -421,11 +563,12 @@ function ResultStatusWithBadge({ label, color }: { label: string; color: string 
   );
 }
 
-function PassRateRing({ passRate, passed, denom }: { passRate: number; passed: number; denom: number }) {
+function PassRateRing({ passRate, passed, denom, isRunInProgress, total }: { passRate: number; passed: number; denom: number; isRunInProgress?: boolean; total?: number }) {
   const radius = 70;
   const circumference = 2 * Math.PI * radius;
   const pct = passRate / 100;
   const offset = circumference * (1 - pct);
+  const executedTotal = isRunInProgress ? `${passed} of ${total ?? passed + denom}` : `${passed} of ${passed + denom === 0 ? 0 : passed + denom} cases`;
   return (
     <div className="print-shadow-none flex flex-col items-center justify-center p-4 border rounded-lg bg-card/40">
       <svg width="180" height="180" viewBox="0 0 180 180" className="print:hidden">
@@ -438,14 +581,14 @@ function PassRateRing({ passRate, passed, denom }: { passRate: number; passed: n
           transform="rotate(-90 90 90)"
           className="transition-all duration-900"
         />
-        <text x="90" y="95" textAnchor="middle" className="fill-foreground font-black text-3xl" dy="0.3em">{passRate}%</text>
-        <text x="90" y="120" textAnchor="middle" className="fill-muted-foreground text-[9px] uppercase tracking-wider" dy="0.3em">Pass Rate</text>
+        <text x="90" y="95" textAnchor="middle" className="fill-foreground font-black text-3xl" dy="0.3em">{isRunInProgress ? '—' : passRate}%</text>
+        <text x="90" y="120" textAnchor="middle" className="fill-muted-foreground text-[9px] uppercase tracking-wider" dy="0.3em">{isRunInProgress ? 'Executed' : 'Pass Rate'}</text>
       </svg>
       {/* Print fallback */}
       <div className="hidden print-donut-fallback items-center justify-center w-28 h-28 rounded-full border-[7px] border-emerald-600"></div>
       <div className="mt-1 text-center">
-        <div className="text-xs font-bold uppercase tracking-wide text-foreground print:text-black">{passed} of {passed + denom === 0 ? 0 : passed + denom} cases passed</div>
-        <div className="text-[10px] text-muted-foreground mt-0.5">Passed ÷ (Total − Invalid)</div>
+        <div className="text-xs font-bold uppercase tracking-wide text-foreground print:text-black">{executedTotal}</div>
+        <div className="text-[10px] text-muted-foreground mt-0.5">{isRunInProgress ? 'Snapshot while run is in progress' : 'Passed ÷ (Total − Invalid)'}</div>
       </div>
     </div>
   );
@@ -632,35 +775,58 @@ function TeamProgressSection({ rows }: { rows: TeamRow[] }) {
       </CardHeader>
       <CardContent className="p-0">
         <table className="w-full text-left">
-          <thead>
-            <tr className="border-b border-border/50 bg-muted/30">
-              <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Tester</th>
-              <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Total</th>
-              <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Passed</th>
-              <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Failed</th>
-              <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Blocked</th>
-              <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Time</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              const pct = r.total > 0 ? Math.round((r.passed / r.total) * 100) : 0;
-              return (
-                <tr key={r.id} className="border-b border-border/30">
-                  <td className="px-3 py-2 text-xs font-medium text-foreground">{r.name}</td>
-                  <td className="px-3 py-2 text-xs text-center">{r.total}</td>
-                  <td className="px-3 py-2 text-xs text-center text-emerald-600">{r.passed}</td>
-                  <td className="px-3 py-2 text-xs text-center text-rose-600">{r.failed + (r.counts?.error || 0)}</td>
-                  <td className="px-3 py-2 text-xs text-center text-amber-600">{r.blocked}</td>
-                  <td className="px-3 py-2 text-xs font-mono text-center text-muted-foreground">{fmtTimerColon(r.executedSeconds)}</td>
-                  <td className="px-3 py-2 w-32">
-                    <div className="h-2 rounded bg-muted/50 overflow-hidden">
-                      <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+            <thead>
+              <tr className="border-b border-border/50 bg-muted/30">
+                <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Tester</th>
+                <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Passed</th>
+                <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Failed</th>
+                <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Blocked</th>
+                <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Progress</th>
+                <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const pct = r.total > 0 ? Math.round((r.passed / r.total) * 100) : 0;
+                const ringColor =
+                  pct === 100 ? 'emerald' : pct > 0 && pct < 100 ? 'brand' : 'rose';
+                return (
+                  <tr key={r.id} className="border-b border-border/30">
+                    <td className="px-3 py-2 text-xs font-medium text-foreground text-center">{r.name}</td>
+                    <td className="px-3 py-2 text-xs text-center text-emerald-600">{r.passed}</td>
+                    <td className="px-3 py-2 text-xs text-center text-rose-600">{r.failed + (r.counts?.error || 0)}</td>
+                    <td className="px-3 py-2 text-xs text-center text-amber-600">{r.blocked}</td>
+                    <td className="px-3 py-2 w-[160px]">
+                      <div className="flex items-center justify-center gap-2">
+                        <ProgressCircle
+                          segments={{
+                            pass: r.passed,
+                            fail: r.failed,
+                            blocked: r.blocked,
+                            invalid: r.counts?.invalid || 0,
+                            error: r.counts?.error || 0,
+                            skip: r.counts?.skip || 0,
+                            total: r.total,
+                          }}
+                          size={28}
+                          strokeWidth={3}
+                          animate
+                          showDot
+                          centerContent={
+                            r.total > 0 ? (
+                              <span className="text-[7px] font-bold font-mono leading-none">{pct}%</span>
+                            ) : null
+                          }
+                        />
+                        <span className="text-[10px] font-mono text-muted-foreground shrink-0">
+                          {r.passed}/{r.total}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-xs font-mono text-center text-muted-foreground">{fmtTimerColon(r.executedSeconds)}</td>
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
         <div className="px-3 py-2 text-[10px] text-muted-foreground border-t border-border/30">{totalExecuted} cases executed across {rows.length} testers</div>

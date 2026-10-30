@@ -69,6 +69,7 @@ import {
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { navigateTo } from '@/lib/navigation';
 import { format } from 'date-fns';
 
 interface ReviewQueueTableProps {
@@ -899,7 +900,7 @@ export function ReviewQueueTable({ projectId, slug }: ReviewQueueTableProps) {
           onSelectionChange={setSelectedReviewIds}
           tableClassName="w-full"
           checkboxCellClassName="w-6 pl-4 pr-1"
-          onRowClick={(row: any) => router.push(`/p/${slug}/reviews/${row.displayId}`)}
+          onRowClick={(row: any, event: any) => navigateTo(event, `/p/${slug}/reviews/${row.displayId}`, router.push)}
           getId={(row: any) => row.id}
           emptyComponent={
             <div className="text-sm text-muted-foreground text-center py-20 flex flex-col items-center justify-center">

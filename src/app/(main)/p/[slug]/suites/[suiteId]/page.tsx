@@ -15,7 +15,7 @@ import { ConfirmModal } from '@/components/common/ConfirmModal';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/select';
-import { X, Plus, Search, Trash2, Loader2, History, Play, Activity, User, Save, Edit2, Check, FileText, Share2, Clock, BarChart2 } from 'lucide-react';
+import { X, Plus, Search, Trash2, Loader2, History, Play, Activity, User, Save, Edit2, Check, FileText, Share2, Clock, BarChart2, GripVertical, LayoutList, Layers } from 'lucide-react';
 import { UserAvatar } from '@/components/common/UserAvatar';
 import { RunStatusBadge } from '@/components/common/RunStatusBadge';
 import { ResultStatusBadge } from '@/components/common/ResultStatusBadge';
@@ -25,6 +25,8 @@ import { ProgressCircle } from '@/components/common/ProgressCircle';
 import { CreateRunModal } from '@/components/runs/CreateRunModal';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { navigateTo } from '@/lib/navigation';
+import { moveById, moveByOffset } from '@/lib/suites/ordering';
 import {
   getSuiteCasesAction,
   archiveTestSuiteAction,
@@ -82,6 +84,11 @@ export default function SuiteDetailPage() {
   const [isSaving, setIsSaving] = useState(false);
 
   const [caseSearchQuery, setCaseSearchQuery] = useState('');
+
+  // Grouping: flat shows the real execution order (what a run will copy).
+  const [groupBy, setGroupBy] = useState<'flat' | 'module'>('flat');
+  const [dragCaseId, setDragCaseId] = useState<string | null>(null);
+  const [dragOverCaseId, setDragOverCaseId] = useState<string | null>(null);
 
   // Title Editing State
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -208,6 +215,33 @@ export default function SuiteDetailPage() {
     return filtered.sort((a, b) => compareCaseAsc(a, b, addCasesSearchQuery));
   }, [availableCases, addCasesSearchQuery, addCasesModuleFilter, addCasesPriorityFilter, addCasesModeFilter, addCasesSourceFilter]);
 
+  useEffect(() => {
+    if (!suiteId || typeof window === 'undefined') return;
+    try {
+      const saved = window.sessionStorage.getItem(`inka_suite_group_${suiteId}`);
+      if (saved === 'flat' || saved === 'module') setGroupBy(saved);
+    } catch {
+      // Storage can be unavailable; flat stays the default.
+    }
+  }, [suiteId]);
+
+  const changeGroupBy = (mode: 'flat' | 'module') => {
+    setGroupBy(mode);
+    try {
+      window.sessionStorage.setItem(`inka_suite_group_${suiteId}`, mode);
+    } catch {
+      // ignore
+    }
+  };
+
+  const moveDraftCase = (caseId: string, targetId: string) => {
+    setDraftCases((prev) => moveById(prev, caseId, targetId));
+  };
+
+  const moveDraftCaseByOffset = (caseId: string, offset: number) => {
+    setDraftCases((prev) => moveByOffset(prev, caseId, offset));
+  };
+
   const handleSaveSuiteTitle = async () => {
     if (!editingTitleText.trim() || !suite) return;
     try {
@@ -249,6 +283,132 @@ export default function SuiteDetailPage() {
 
     return groups;
   }, [filteredDraftCases, modules]);
+
+  // Arranging is only meaningful in flat view, with no search filter applied
+  // (a filtered list has no stable neighbour to drop next to).
+  const canArrange = canEdit && groupBy === 'flat' && !caseSearchQuery.trim() && draftCases.length > 1;
+
+  const renderSuiteCaseRow = (tc: any, serialNum: number, draggable: boolean) => {
+    const caseKey = tc.displayId || tc.display_id || tc.id;
+    const caseRouteParam = tc.id || tc.displayId;
+
+    return (
+      <div
+        key={tc.id}
+        draggable={draggable}
+        onDragStart={
+          draggable
+            ? (e) => {
+                setDragCaseId(tc.id);
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', tc.id);
+              }
+            : undefined
+        }
+        onDragEnd={
+          draggable
+            ? () => {
+                setDragCaseId(null);
+                setDragOverCaseId(null);
+              }
+            : undefined
+        }
+        onDragOver={
+          draggable
+            ? (e) => {
+                e.preventDefault();
+                if (dragOverCaseId !== tc.id) setDragOverCaseId(tc.id);
+              }
+            : undefined
+        }
+        onDrop={
+          draggable
+            ? (e) => {
+                e.preventDefault();
+                const draggedId = dragCaseId || e.dataTransfer.getData('text/plain');
+                if (draggedId) moveDraftCase(draggedId, tc.id);
+                setDragCaseId(null);
+                setDragOverCaseId(null);
+              }
+            : undefined
+        }
+        className={cn(
+          "group flex items-center px-4 py-2 hover:bg-muted/30 transition-colors",
+          selectedDraftIds.has(tc.id) && "bg-violet-50 dark:bg-violet-950/20",
+          draggable && dragOverCaseId === tc.id && dragCaseId !== tc.id && "ring-2 ring-inset ring-primary/50",
+          draggable && dragCaseId === tc.id && "opacity-60"
+        )}
+      >
+        {draggable && (
+          <button
+            type="button"
+            onKeyDown={(e) => {
+              if (!e.altKey) return;
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                moveDraftCaseByOffset(tc.id, -1);
+              } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                moveDraftCaseByOffset(tc.id, 1);
+              }
+            }}
+            className="mr-1 flex h-6 w-6 shrink-0 cursor-grab items-center justify-center rounded text-muted-foreground/60 outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/60 active:cursor-grabbing"
+            title="Drag to reorder — or focus and press Alt+↑ / Alt+↓"
+            aria-label={`Reorder case ${caseKey} (Alt+Arrow keys)`}
+          >
+            <GripVertical className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <Checkbox
+          checked={selectedDraftIds.has(tc.id)}
+          onCheckedChange={(checked) => {
+            setSelectedDraftIds(prev => {
+              const next = new Set(prev);
+              if (checked) next.add(tc.id); else next.delete(tc.id);
+              return next;
+            });
+          }}
+          className="mr-3 shrink-0"
+        />
+        <span className="w-8 shrink-0 text-center font-mono text-xs text-muted-foreground">
+          {serialNum}
+        </span>
+        <span
+          className="w-24 shrink-0 font-mono text-xs text-primary font-semibold truncate cursor-pointer hover:underline"
+          onClick={(e) => navigateTo(e, `/p/${slug}/repository/${caseRouteParam}`, router.push)}
+          title={caseKey}
+        >
+          {caseKey}
+        </span>
+        <div className="flex-1 min-w-0 ml-2 pr-4 flex items-center gap-2">
+          <span
+            className="truncate text-sm font-medium cursor-pointer group-hover:text-primary transition-colors"
+            onClick={(e) => navigateTo(e, `/p/${slug}/repository/${caseRouteParam}`, router.push)}
+            title={tc.title}
+          >
+            {tc.title}
+          </span>
+        </div>
+        <div className="w-40 shrink-0 pr-4">
+          <AssigneeDropdown
+            assignedTo={tc.assigneeId}
+            members={members}
+            onAssign={async (userId) => handleAssignSingle(tc.id, userId)}
+          />
+        </div>
+        <div className="w-24 shrink-0 flex justify-start">
+          <PriorityBadge priority={tc.priority} />
+        </div>
+        <button
+          className="w-8 shrink-0 flex items-center justify-center p-1 text-muted-foreground hover:text-red-600 transition-colors cursor-pointer"
+          onClick={() => handleRemoveCase(tc.id)}
+          title="Remove case from suite"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  };
 
   if (!project || !suite) return null;
 
@@ -313,6 +473,15 @@ export default function SuiteDetailPage() {
       }
       return c;
     }));
+  };
+
+  // A run copies the *saved* suite order, so nudge the user when the draft has
+  // unsaved order/assignment edits.
+  const openRunModal = () => {
+    if (hasDraftChanges) {
+      toast.info('Save your changes first — the run copies the saved execution order.');
+    }
+    setShowRunModal(true);
   };
 
   const handleSaveSuite = async () => {
@@ -400,7 +569,7 @@ export default function SuiteDetailPage() {
         </div>
         {canEdit && (
           <div className="flex items-center gap-2">
-            <Button variant="outline" className="gradient-btn text-white" onClick={() => setShowRunModal(true)}>
+            <Button variant="outline" className="gradient-btn text-white" onClick={openRunModal}>
               <Play className="h-4 w-4 mr-2" />
               Run Suite
             </Button>
@@ -481,8 +650,8 @@ export default function SuiteDetailPage() {
 
         <TabsContent value="cases" className="mt-4 space-y-4 w-full">
           {/* Header Toolbar containing search currently added cases and Add Cases button */}
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[180px] flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Search cases in suite..."
@@ -490,6 +659,32 @@ export default function SuiteDetailPage() {
                 onChange={(e) => setCaseSearchQuery(e.target.value)}
                 className="pl-10 h-9"
               />
+            </div>
+            <div className="flex items-center rounded-lg border border-border bg-background/50 p-0.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => changeGroupBy('flat')}
+                title="Show cases in execution order"
+                className={cn(
+                  'flex h-8 items-center gap-1 rounded-md px-2.5 text-xs font-medium transition-colors cursor-pointer',
+                  groupBy === 'flat' ? 'bg-muted text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <LayoutList className="h-3.5 w-3.5" />
+                <span>Execution order</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => changeGroupBy('module')}
+                title="Group cases by module"
+                className={cn(
+                  'flex h-8 items-center gap-1 rounded-md px-2.5 text-xs font-medium transition-colors cursor-pointer',
+                  groupBy === 'module' ? 'bg-muted text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <Layers className="h-3.5 w-3.5" />
+                <span>By module</span>
+              </button>
             </div>
             {canEdit && (
               <Button size="sm" onClick={() => setShowAddCasesDialog(true)} className="gradient-btn text-white h-9 shrink-0">
@@ -541,89 +736,73 @@ export default function SuiteDetailPage() {
             </div>
           ) : (
             <div className="space-y-6 w-full">
-              {draftCasesByModule.map((group) => {
-                const groupSelected = group.cases.length > 0 && group.cases.every((c: any) => selectedDraftIds.has(c.id));
-                return (
-                  <div key={group.moduleName} className="space-y-0 rounded-lg border border-border/60 overflow-hidden bg-card shadow-sm w-full">
-                    <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-foreground uppercase tracking-wider bg-muted/20 border-b border-border/50">
-                      <Checkbox
-                        checked={groupSelected}
-                        onCheckedChange={(checked) => selectAllInGroup(group.cases.map(c => c.id), !!checked)}
-                        className="mr-2"
-                      />
-                      {group.moduleName} ({group.cases.length})
-                    </div>
-                    <div className="flex items-center px-4 py-2 text-[10px] text-muted-foreground font-semibold uppercase tracking-wider bg-background border-b border-border/30">
-                      <span className="w-6 shrink-0" />
-                      <span className="w-8 shrink-0 text-center font-mono">#</span>
-                      <span className="w-24 shrink-0 font-mono">Key</span>
-                      <span className="flex-1 min-w-0 ml-2">Title</span>
-                      <span className="w-40 shrink-0 text-left pl-2">Assignee</span>
-                      <span className="w-24 shrink-0 text-left">Priority</span>
-                      <span className="w-8 shrink-0" />
-                    </div>
-                    <div className="divide-y divide-border/30">
-                      {group.cases.map((tc) => {
-                        const serialNum = filteredDraftCases.findIndex((c: any) => c.id === tc.id) + 1;
-                        const caseKey = tc.displayId || tc.display_id || tc.id;
-                        const caseRouteParam = tc.id || tc.displayId;
-
-                        return (
-                          <div key={tc.id} className={cn("group flex items-center px-4 py-2 hover:bg-muted/30 transition-colors", selectedDraftIds.has(tc.id) && "bg-violet-50 dark:bg-violet-950/20")}>
-                            <Checkbox
-                              checked={selectedDraftIds.has(tc.id)}
-                              onCheckedChange={(checked) => {
-                                setSelectedDraftIds(prev => {
-                                  const next = new Set(prev);
-                                  if (checked) next.add(tc.id); else next.delete(tc.id);
-                                  return next;
-                                });
-                              }}
-                              className="mr-3 shrink-0"
-                            />
-                            <span className="w-8 shrink-0 text-center font-mono text-xs text-muted-foreground">
-                              {serialNum}
-                            </span>
-                            <span 
-                              className="w-24 shrink-0 font-mono text-xs text-primary font-semibold truncate cursor-pointer hover:underline" 
-                              onClick={() => router.push(`/p/${slug}/repository/${caseRouteParam}`)}
-                              title={caseKey}
-                            >
-                              {caseKey}
-                            </span>
-                            <div className="flex-1 min-w-0 ml-2 pr-4 flex items-center gap-2">
-                              <span 
-                                className="truncate text-sm font-medium cursor-pointer group-hover:text-primary transition-colors" 
-                                onClick={() => router.push(`/p/${slug}/repository/${caseRouteParam}`)}
-                                title={tc.title}
-                              >
-                                {tc.title}
-                              </span>
-                            </div>
-                            <div className="w-40 shrink-0 pr-4">
-                              <AssigneeDropdown
-                                assignedTo={tc.assigneeId}
-                                members={members}
-                                onAssign={async (userId) => handleAssignSingle(tc.id, userId)}
-                              />
-                            </div>
-                            <div className="w-24 shrink-0 flex justify-start">
-                              <PriorityBadge priority={tc.priority} />
-                            </div>
-                            <button 
-                              className="w-8 shrink-0 flex items-center justify-center p-1 text-muted-foreground hover:text-red-600 transition-colors cursor-pointer" 
-                              onClick={() => handleRemoveCase(tc.id)}
-                              title="Remove case from suite"
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
+              {groupBy === 'flat' ? (
+                <div className="space-y-0 rounded-lg border border-border/60 overflow-hidden bg-card shadow-sm w-full">
+                  <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-foreground uppercase tracking-wider bg-muted/20 border-b border-border/50">
+                    <Checkbox
+                      checked={filteredDraftCases.length > 0 && filteredDraftCases.every((c: any) => selectedDraftIds.has(c.id))}
+                      onCheckedChange={(checked) => selectAllInGroup(filteredDraftCases.map((c: any) => c.id), !!checked)}
+                      className="mr-2"
+                    />
+                    Execution order ({filteredDraftCases.length})
+                    {canArrange && (
+                      <span className="ml-auto flex items-center gap-1 text-[10px] font-medium normal-case tracking-normal text-muted-foreground">
+                        <GripVertical className="h-3 w-3" />
+                        Drag to rearrange · Alt+↑/↓ · Save to apply
+                      </span>
+                    )}
                   </div>
-                );
-              })}
+                  <div className="flex items-center px-4 py-2 text-[10px] text-muted-foreground font-semibold uppercase tracking-wider bg-background border-b border-border/30">
+                    {canArrange && <span className="mr-1 h-6 w-6 shrink-0" />}
+                    <span className="mr-3 h-4 w-4 shrink-0" />
+                    <span className="w-8 shrink-0 text-center font-mono">#</span>
+                    <span className="w-24 shrink-0 font-mono">Key</span>
+                    <span className="flex-1 min-w-0 ml-2">Title</span>
+                    <span className="w-40 shrink-0 text-left pl-2">Assignee</span>
+                    <span className="w-24 shrink-0 text-left">Priority</span>
+                    <span className="w-8 shrink-0" />
+                  </div>
+                  <div className="divide-y divide-border/30">
+                    {filteredDraftCases.map((tc: any, index: number) =>
+                      renderSuiteCaseRow(tc, index + 1, canArrange)
+                    )}
+                  </div>
+                </div>
+              ) : (
+                draftCasesByModule.map((group) => {
+                  const groupSelected = group.cases.length > 0 && group.cases.every((c: any) => selectedDraftIds.has(c.id));
+                  return (
+                    <div key={group.moduleName} className="space-y-0 rounded-lg border border-border/60 overflow-hidden bg-card shadow-sm w-full">
+                      <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-foreground uppercase tracking-wider bg-muted/20 border-b border-border/50">
+                        <Checkbox
+                          checked={groupSelected}
+                          onCheckedChange={(checked) => selectAllInGroup(group.cases.map(c => c.id), !!checked)}
+                          className="mr-2"
+                        />
+                        {group.moduleName} ({group.cases.length})
+                      </div>
+                      <div className="flex items-center px-4 py-2 text-[10px] text-muted-foreground font-semibold uppercase tracking-wider bg-background border-b border-border/30">
+                        <span className="mr-3 h-4 w-4 shrink-0" />
+                        <span className="w-8 shrink-0 text-center font-mono">#</span>
+                        <span className="w-24 shrink-0 font-mono">Key</span>
+                        <span className="flex-1 min-w-0 ml-2">Title</span>
+                        <span className="w-40 shrink-0 text-left pl-2">Assignee</span>
+                        <span className="w-24 shrink-0 text-left">Priority</span>
+                        <span className="w-8 shrink-0" />
+                      </div>
+                      <div className="divide-y divide-border/30">
+                        {group.cases.map((tc: any) =>
+                          renderSuiteCaseRow(
+                            tc,
+                            filteredDraftCases.findIndex((c: any) => c.id === tc.id) + 1,
+                            false
+                          )
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           )}
         </TabsContent>
@@ -685,7 +864,7 @@ export default function SuiteDetailPage() {
             <Button
               size="sm"
               className="gradient-btn text-white h-8 text-xs gap-1.5 shrink-0"
-              onClick={() => setShowRunModal(true)}
+              onClick={openRunModal}
             >
               <Play className="h-3.5 w-3.5" />
               <span>Run Suite</span>
@@ -708,7 +887,7 @@ export default function SuiteDetailPage() {
               <Button
                 size="sm"
                 className="gradient-btn text-white mt-2 text-xs"
-                onClick={() => setShowRunModal(true)}
+                onClick={openRunModal}
               >
                 <Play className="h-3.5 w-3.5 mr-1.5" />
                 <span>Start First Run</span>

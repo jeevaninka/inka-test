@@ -8,6 +8,7 @@ import { revalidatePath } from 'next/cache';
 import { requireProjectMember, requireProjectMemberByCaseId } from '@/lib/permissions';
 import { enforceImportRateLimit } from '@/lib/rate-limit';
 import { logger } from '@/lib/logger';
+import { snapshotTestCaseVersion, touchesCaseContent } from '@/lib/cases/versioning';
 
 export async function createTestCaseAction(data: {
   projectId: string;
@@ -288,12 +289,23 @@ export async function updateTestCaseAction(id: string, data: {
     updateData.status = 'DRAFT';
   }
 
-  const testCase = await prisma.testCase.update({
-    where: { id },
-    data: {
-      ...updateData,
-      updated_by: userId,
-    },
+  const testCase = await prisma.$transaction(async (tx) => {
+    const updated = await tx.testCase.update({
+      where: { id },
+      data: {
+        ...updateData,
+        updated_by: userId,
+      },
+    });
+
+    // Content changes create a new immutable version. Runs lock themselves to a
+    // version when a case is added, so this is what makes "case updated since
+    // added" detectable instead of invisible.
+    if (touchesCaseContent(data as Record<string, unknown>)) {
+      await snapshotTestCaseVersion(tx, id, userId);
+    }
+
+    return updated;
   });
 
   revalidatePath(`/p`);
@@ -423,6 +435,7 @@ export async function getArchivedTestCasesAction(projectId: string) {
       ai_generated: true,
       created_by: true,
       created_at: true,
+      updated_at: true,
       deleted_at: true,
     },
   });
@@ -442,6 +455,7 @@ export async function getArchivedTestCasesAction(projectId: string) {
     aiGenerated: c.ai_generated,
     createdBy: c.created_by,
     createdAt: c.created_at.toISOString(),
+    updatedAt: c.updated_at.toISOString(),
     archivedAt: c.deleted_at?.toISOString(),
   }));
 }
@@ -1035,6 +1049,39 @@ export interface DuplicateCaseGroup {
  * automation link (Postman request/folder or Datadog test). Title alone is not
  * enough — parameterized suites intentionally reuse titles with different links.
  */
+/**
+ * Titles that already exist in the project, used by the import dialog to
+ * de-duplicate a file before it reaches the database.
+ */
+export async function findExistingCaseTitlesAction(
+  projectId: string,
+  titles: string[]
+): Promise<Array<{ id: string; displayId: string; title: string }>> {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) throw new Error('Unauthorized');
+  await requireProjectMember(projectId, (session.user as any).id as number);
+
+  const wanted = new Set(
+    (titles || [])
+      .map((t) => String(t || '').toLowerCase().replace(/\s+/g, ' ').replace(/[—–-]/g, '-').trim())
+      .filter(Boolean)
+  );
+  if (wanted.size === 0) return [];
+
+  const cases = await prisma.testCase.findMany({
+    where: { project_id: projectId, deleted_at: null },
+    select: { id: true, display_id: true, title: true },
+  });
+
+  return cases
+    .filter((c) =>
+      wanted.has(
+        String(c.title || '').toLowerCase().replace(/\s+/g, ' ').replace(/[—–-]/g, '-').trim()
+      )
+    )
+    .map((c) => ({ id: c.id, displayId: c.display_id, title: c.title }));
+}
+
 export async function findDuplicateTestCasesAction(
   projectId: string
 ): Promise<DuplicateCaseGroup[]> {

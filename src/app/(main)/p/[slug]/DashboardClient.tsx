@@ -52,6 +52,7 @@ import type {
   NeedsAttentionData,
 } from '@/app/actions/dashboard';
 import type { EnhancedDashboardStats } from '@/lib/dal';
+import { navigateTo } from '@/lib/navigation';
 
 interface DashboardClientProps {
   project: Project | null;
@@ -598,7 +599,7 @@ export function DashboardClient({
                   return (
                     <div
                       key={item.id}
-                      onClick={() => router.push(`/p/${slug}${item.link}`)}
+                      onClick={(e) => navigateTo(e, `/p/${slug}${item.link}`, router.push)}
                       className="py-3 px-2 flex items-center justify-between gap-3 group hover:bg-muted/30 rounded-xl transition-all cursor-pointer"
                     >
                       <div className="flex items-center gap-3 min-w-0">
@@ -654,7 +655,7 @@ export function DashboardClient({
                 {topFailingCases.map((c) => (
                   <div
                     key={c.id}
-                    onClick={() => router.push(`/p/${slug}/repository?case=${c.id}`)}
+                    onClick={(e) => navigateTo(e, `/p/${slug}/repository?case=${c.id}`, router.push)}
                     className="py-2.5 px-2 flex items-center justify-between gap-3 group hover:bg-muted/30 rounded-xl transition-all cursor-pointer"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -701,7 +702,7 @@ export function DashboardClient({
                 myQueue.map((item) => (
                   <div
                     key={item.id}
-                    onClick={() => router.push(`/p/${slug}${item.link}`)}
+                    onClick={(e) => navigateTo(e, `/p/${slug}${item.link}`, router.push)}
                     className="py-3 px-1.5 flex items-center justify-between gap-2.5 group hover:bg-muted/30 rounded-xl transition-all cursor-pointer"
                   >
                     <div className="min-w-0">

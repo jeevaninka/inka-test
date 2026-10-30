@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db';
 import { triggerProjectWebhooks } from '@/lib/webhook';
 import { createApiHandler, apiErrorResponse } from '@/lib/apiHandler';
 import { requireProjectMemberByRunId } from '@/lib/permissions';
-import { getRunResultsAction } from '@/app/actions/runs';
+import { loadRunResults } from '@/lib/runs/load-results';
 import { logger } from '@/lib/logger';
 import { ErrorCodes, normalizeError } from '@/lib/errors';
 
@@ -16,8 +16,9 @@ export const GET = createApiHandler<{ runId: string }>(async (req, { params, use
     return apiErrorResponse('Run ID is required', 400, ErrorCodes.VALIDATION, requestId);
   }
 
+  // Authorization happens once, here; loadRunResults performs no checks.
   await requireProjectMemberByRunId(runId, userId);
-  const results = await getRunResultsAction(runId);
+  const results = await loadRunResults(runId);
   return NextResponse.json(results);
 });
 
@@ -47,10 +48,32 @@ export async function PATCH(
 
     const { runId } = await params;
 
-    const run = await prisma.testRun.findUnique({
-      where: { id: runId },
-      include: { project: { select: { id: true, api_secret: true } } },
-    });
+    // Parse first (no I/O) so the run + result lookups can be issued together.
+    const body = await request.json().catch(() => null);
+    if (!body) {
+      return apiErrorResponse('Invalid JSON body', 400, ErrorCodes.VALIDATION, requestId);
+    }
+
+    const { testCaseId, status, notes, stepResults, automationLog, triggerRef } = body;
+
+    if (!testCaseId) {
+      return apiErrorResponse('testCaseId is required', 400, ErrorCodes.VALIDATION, requestId);
+    }
+
+    if (!status) {
+      return apiErrorResponse('status is required', 400, ErrorCodes.VALIDATION, requestId);
+    }
+
+    // Independent lookups: one round-trip instead of two.
+    const [run, runResult] = await Promise.all([
+      prisma.testRun.findUnique({
+        where: { id: runId },
+        include: { project: { select: { id: true, api_secret: true } } },
+      }),
+      prisma.runResult.findFirst({
+        where: { run_id: runId, test_case_id: testCaseId },
+      }),
+    ]);
 
     if (!run) {
       return apiErrorResponse('Run not found', 404, ErrorCodes.NOT_FOUND, requestId);
@@ -76,26 +99,6 @@ export async function PATCH(
       return apiErrorResponse('Invalid API key', 401, ErrorCodes.UNAUTHORIZED, requestId);
     }
 
-    const body = await request.json().catch(() => null);
-    if (!body) {
-      return apiErrorResponse('Invalid JSON body', 400, ErrorCodes.VALIDATION, requestId);
-    }
-
-    const { testCaseId, status, notes, stepResults, automationLog, triggerRef } = body;
-
-    if (!testCaseId) {
-      return apiErrorResponse('testCaseId is required', 400, ErrorCodes.VALIDATION, requestId);
-    }
-
-    if (!status) {
-      return apiErrorResponse('status is required', 400, ErrorCodes.VALIDATION, requestId);
-    }
-
-    // Find the RunResult for this run + testCase
-    const runResult = await prisma.runResult.findFirst({
-      where: { run_id: runId, test_case_id: testCaseId },
-    });
-
     if (!runResult) {
       return apiErrorResponse(
         'RunResult not found for this run and test case',
@@ -120,6 +123,7 @@ export async function PATCH(
       where: { id: runResult.id },
       data: updateData,
     });
+
 
     // Optionally update the run trigger ref
     if (triggerRef) {
@@ -147,22 +151,32 @@ export async function PATCH(
       });
     });
 
-    // Return run progress
-    const allResults = await prisma.runResult.findMany({
+    // Return run progress. A grouped count keeps the row count O(statuses)
+    // instead of transferring every result of the run.
+    const statusCounts = await prisma.runResult.groupBy({
+      by: ['status'],
       where: { run_id: runId },
-      select: { status: true },
+      _count: { _all: true },
     });
 
+    const countsByStatus = new Map<string, number>();
+    let totalResults = 0;
+    for (const row of statusCounts) {
+      countsByStatus.set(row.status, row._count._all);
+      totalResults += row._count._all;
+    }
+    const countOf = (s: string) => countsByStatus.get(s) ?? 0;
+
     const progress = {
-      total: allResults.length,
-      pass: allResults.filter((r) => r.status === 'PASS').length,
-      fail: allResults.filter((r) => r.status === 'FAIL').length,
-      error: allResults.filter((r) => r.status === 'ERROR').length,
-      blocked: allResults.filter((r) => r.status === 'BLOCKED').length,
-      skip: allResults.filter((r) => r.status === 'SKIP').length,
-      invalid: allResults.filter((r) => r.status === 'INVALID').length,
-      pending: allResults.filter((r) => r.status === 'PENDING').length,
-      cancelled: allResults.filter((r) => r.status === 'CANCELLED').length,
+      total: totalResults,
+      pass: countOf('PASS'),
+      fail: countOf('FAIL'),
+      error: countOf('ERROR'),
+      blocked: countOf('BLOCKED'),
+      skip: countOf('SKIP'),
+      invalid: countOf('INVALID'),
+      pending: countOf('PENDING'),
+      cancelled: countOf('CANCELLED'),
     };
 
     logger.info('Automated run result updated via API key', {

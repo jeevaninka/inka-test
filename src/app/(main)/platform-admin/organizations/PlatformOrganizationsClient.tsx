@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -25,7 +26,6 @@ import {
   Check,
   RotateCw,
   ArrowLeft,
-  Zap,
   ExternalLink,
   CheckCircle2,
   Clock,
@@ -35,7 +35,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import Image from 'next/image';
 import {
   createOrganizationByPlatformAdminAction,
   resendOrganizationInvitationAction,
@@ -446,7 +446,7 @@ export function PlatformOrganizationsClient({
       <div className="flex items-center justify-between gap-4 flex-wrap pb-4 border-b border-border/40">
         <div className="space-y-1">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-mono uppercase tracking-wider mb-1">
-            <Zap className="h-3.5 w-3.5" />
+            <Image src="/logo.svg" alt="InkaTest" width={14} height={14} />
             <span>Platform Super Admin</span>
           </div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">
@@ -464,7 +464,7 @@ export function PlatformOrganizationsClient({
               Back to Workspaces
             </Link>
           </Button>
-          <Button onClick={handleOpenProvisionModal} className="btn-glow">
+          <Button onClick={handleOpenProvisionModal} className="gradient-btn text-white">
             <Plus className="h-4 w-4 mr-1.5" />
             New Organization
           </Button>
@@ -652,7 +652,7 @@ export function PlatformOrganizationsClient({
             <Button
               onClick={handleProvision}
               disabled={isPending}
-              className="btn-glow font-semibold"
+              className="gradient-btn text-white font-semibold"
             >
               {isPending ? 'Provisioning…' : 'Provision Organization'}
             </Button>

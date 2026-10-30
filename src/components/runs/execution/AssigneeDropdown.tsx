@@ -95,7 +95,7 @@ export function AssigneeDropdown({
           type="button"
           disabled={runStatus === 'aborted'}
           className={cn(
-            "h-7 px-1 rounded-md text-xs flex items-center gap-1.5 transition-colors duration-150 cursor-pointer select-none max-w-full outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+            "h-7 px-3 rounded-md text-xs flex items-center gap-1.5 transition-colors duration-150 cursor-pointer select-none max-w-full outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             uniqueAssigneeIds.length === 0
               ? "text-muted-foreground hover:text-foreground"
               : "text-foreground/90",

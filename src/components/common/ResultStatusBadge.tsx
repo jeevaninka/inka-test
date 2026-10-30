@@ -11,6 +11,8 @@ interface ResultStatusBadgeProps {
   showIcon?: boolean;
   attemptNumber?: number;
   timeSpentSeconds?: number;
+  /** The manual session was explicitly started (console opened) but has no verdict yet. */
+  started?: boolean;
   isManualOverride?: boolean;
   /**
    * `pill` keeps the filled badge used on detail screens. `plain` renders the
@@ -104,9 +106,12 @@ export function ResultStatusBadge({
   showIcon = false,
   attemptNumber,
   timeSpentSeconds,
+  started = false,
   variant = 'pill',
 }: ResultStatusBadgeProps) {
-  const isStarted = status === 'pending' && typeof timeSpentSeconds === 'number' && timeSpentSeconds > 0;
+  const isStarted =
+    status === 'pending' &&
+    (started || (typeof timeSpentSeconds === 'number' && timeSpentSeconds > 0));
   const config = isStarted
     ? { bg: 'bg-[#4aa8ff]/15 text-[#4aa8ff] border border-[#4aa8ff]/30', text: 'text-[#4aa8ff]', icon: Clock }
     : resultConfig[status] || resultConfig.pending;
@@ -114,7 +119,7 @@ export function ResultStatusBadge({
   const hasAttempt = typeof attemptNumber === 'number' && attemptNumber > 1;
 
   const primaryLabel = isStarted
-    ? 'Running'
+    ? 'In Progress'
     : status === 'pending'
     ? 'Not Run'
     : status.charAt(0).toUpperCase() + status.slice(1);

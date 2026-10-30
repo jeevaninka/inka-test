@@ -84,27 +84,90 @@ export async function getWorkspaceSuspension(
   userId: number,
   workspaceId: string
 ): Promise<SuspensionInfo | null> {
-  const workspace = await prisma.workspace.findUnique({
-    where: { id: workspaceId },
-    select: { organization_id: true },
+  // One round-trip: the caller's organization membership for the organization
+  // that owns this workspace carries both suspension flags.
+  const member = await prisma.organizationMember.findFirst({
+    where: {
+      user_id: userId,
+      organization: { workspaces: { some: { id: workspaceId } } },
+    },
+    select: {
+      suspended_at: true,
+      organization: {
+        select: { id: true, name: true, suspended_at: true, suspend_reason: true },
+      },
+    },
   });
 
-  if (!workspace?.organization_id) return null;
-  return getOrgSuspension(userId, workspace.organization_id);
+  const org = member?.organization;
+  if (!org) return null;
+
+  if (org.suspended_at) {
+    return {
+      kind: 'ORG',
+      organizationId: org.id,
+      organizationName: org.name,
+      reason: org.suspend_reason,
+    };
+  }
+
+  if (member.suspended_at) {
+    return {
+      kind: 'MEMBER',
+      organizationId: org.id,
+      organizationName: org.name,
+      reason: null,
+    };
+  }
+
+  return null;
 }
 
 export async function getProjectSuspension(
   userId: number,
   projectId: string
 ): Promise<SuspensionInfo | null> {
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { workspace: { select: { organization_id: true } } },
+  // One round-trip: find the caller's organization membership for the
+  // organization that owns this project.
+  const member = await prisma.organizationMember.findFirst({
+    where: {
+      user_id: userId,
+      organization: {
+        workspaces: {
+          some: { projects: { some: { id: projectId } } },
+        },
+      },
+    },
+    select: {
+      suspended_at: true,
+      organization: {
+        select: { id: true, name: true, suspended_at: true, suspend_reason: true },
+      },
+    },
   });
 
-  const organizationId = project?.workspace?.organization_id;
-  if (!organizationId) return null;
-  return getOrgSuspension(userId, organizationId);
+  const org = member?.organization;
+  if (!org) return null;
+
+  if (org.suspended_at) {
+    return {
+      kind: 'ORG',
+      organizationId: org.id,
+      organizationName: org.name,
+      reason: org.suspend_reason,
+    };
+  }
+
+  if (member.suspended_at) {
+    return {
+      kind: 'MEMBER',
+      organizationId: org.id,
+      organizationName: org.name,
+      reason: null,
+    };
+  }
+
+  return null;
 }
 
 /**

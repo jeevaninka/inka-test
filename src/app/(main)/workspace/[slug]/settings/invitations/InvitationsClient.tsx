@@ -373,7 +373,7 @@ export function InvitationsClient({
                 size="sm"
                 onClick={handleSaveDomainSettings}
                 disabled={isSavingDomain}
-                className="h-8 text-xs font-semibold btn-glow"
+                className="h-8 text-xs font-semibold gradient-btn text-white"
               >
                 <Save className="h-3.5 w-3.5 mr-1.5" />
                 {isSavingDomain ? 'Saving...' : 'Save Domain Settings'}
@@ -459,7 +459,7 @@ export function InvitationsClient({
             <Button
               onClick={handleSendInvite}
               disabled={!inviteEmail.trim() || isSendingInvite}
-              className="btn-glow"
+              className="gradient-btn text-white"
             >
               {isSendingInvite ? 'Sending...' : 'Send Invitation'}
             </Button>

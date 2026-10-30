@@ -56,6 +56,8 @@ interface ExternalRunnerModalProps {
   /** Pin the runner to a single provider (used when launched from a case's Run action). */
   lockedProvider?: 'postman' | 'datadog';
   onExecutionComplete?: (result: ExternalTestExecutionResult) => void;
+  /** Fired as soon as an asynchronous execution is accepted (run is live). */
+  onRunStarted?: (result: ExternalTestExecutionResult) => void;
 }
 
 export function ExternalRunnerModal({
@@ -72,6 +74,7 @@ export function ExternalRunnerModal({
   initialCustomFields = {},
   lockedProvider,
   onExecutionComplete,
+  onRunStarted,
 }: ExternalRunnerModalProps) {
   const savedPostman = initialCustomFields?._postman || {};
   const savedDatadog = initialCustomFields?._datadog || {};
@@ -520,6 +523,9 @@ export function ExternalRunnerModal({
   };
 
   const handleExecute = async () => {
+    // Idempotent start: the footer button is disabled while a run is being
+    // accepted, and this guard blocks programmatic double submits too.
+    if (running) return;
     if (provider === 'postman' && hasLinkedPostman && selectedRequestOrders.size === 0) {
       toast.error('Linked request could not be resolved. Re-sync from Postman in the case menu.');
       return;
@@ -636,6 +642,9 @@ export function ExternalRunnerModal({
         toast.error(execRes.summary);
       }
       onExecutionComplete?.(execRes);
+      if (execRes.overallStatus === 'PENDING') {
+        onRunStarted?.(execRes);
+      }
     } catch (err: any) {
       toast.error(err?.message || 'Execution failed');
     } finally {

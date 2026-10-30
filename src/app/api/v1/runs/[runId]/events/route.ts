@@ -87,6 +87,7 @@ export async function GET(
             execution_state: true,
             provider_execution_id: true,
             updated_at: true,
+            started_at: true,
             last_execution_error: true,
           },
         },
@@ -96,17 +97,29 @@ export async function GET(
     const rows: any[] = run.results || [];
     const latest: any[] = latestAttempts(rows);
     const positions = computeQueuePositions(latest as any);
-    const maxUpdated = rows.reduce(
-      (max: number, row: any) => Math.max(max, row.updated_at?.getTime() || 0),
-      0
-    );
+    // Content signature: heartbeats and other writes that only bump updated_at
+    // must not look like a change, otherwise every idle poll refetches the run.
+    const signature = latest
+      .map(
+        (row: any) =>
+          `${row.id}:${row.status}:${row.execution_state}:${row.attempt_number}:${
+            positions[row.id] ?? ''
+          }:${row.provider_execution_id ?? ''}:${row.last_execution_error ?? ''}:${
+            row.started_at ? 1 : 0
+          }`
+      )
+      .join('|');
+    let hash = 5381;
+    for (let i = 0; i < signature.length; i += 1) {
+      hash = ((hash << 5) + hash + signature.charCodeAt(i)) | 0;
+    }
     return {
       runId,
       lifecycle: deriveRunLifecycle(run, latest as any),
       status: String(run.status || '').toLowerCase(),
       generation: run.execution_generation,
       stopRequestedAt: run.stop_requested_at?.toISOString() ?? null,
-      version: `${maxUpdated}:${rows.length}:${run.status}:${
+      version: `${hash.toString(36)}:${rows.length}:${run.status}:${
         run.stop_requested_at?.getTime() || 0
       }:${run.execution_generation}`,
       results: latest.map((row: any) => ({
@@ -143,10 +156,16 @@ export async function GET(
         }
       };
 
+      let lastSentVersion: string | null = null;
       const emitSnapshot = async () => {
         try {
           const snapshot = await buildSnapshot();
-          if (snapshot) send('snapshot', snapshot);
+          if (!snapshot) return;
+          // Idle connections would otherwise rebuild and resend the identical
+          // payload every tick; the client only needs change hints.
+          if (snapshot.version === lastSentVersion) return;
+          lastSentVersion = snapshot.version;
+          send('snapshot', snapshot);
         } catch {
           // transient DB error: keep the stream alive; client keeps polling
         }

@@ -27,7 +27,8 @@ export interface ColumnDef<T> {
 interface DataTableProps<T> {
   data: T[];
   columns: ColumnDef<T>[];
-  onRowClick?: (row: T) => void;
+  /** Row click. Receives the event so callers can honour Cmd/Ctrl-click. */
+  onRowClick?: (row: T, event: React.MouseEvent<HTMLTableRowElement>) => void;
   selectable?: boolean;
   selectedIds?: Set<string>;
   onSelectionChange?: (ids: Set<string>) => void;
@@ -238,7 +239,7 @@ export function DataTable<T>({
                     rowDraggable && 'cursor-grab active:cursor-grabbing hover:bg-primary/[0.06] dark:hover:bg-white/[0.05] transition-colors',
                     isDragOver && 'bg-primary/10 border-t-2 border-t-primary'
                   )}
-                  onClick={() => onRowClick?.(row)}
+                  onClick={(event) => onRowClick?.(row, event)}
                   draggable={rowDraggable}
                   onDragStart={(e) => onRowDragStart?.(e, row)}
                   onDragOver={

@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { DataTable } from '@/components/common/DataTable';
 import { ResultStatusBadge } from '@/components/common/ResultStatusBadge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ExternalLink, RotateCcw, Loader2, Copy, Bug, Plus, Printer, Share2, Clock, CheckCircle2, AlertOctagon, MinusCircle, Ban, ArrowLeft, Globe, Database, TriangleAlert, User, FileText } from 'lucide-react';
+import { ExternalLink, RotateCcw, Loader2, Copy, Bug, Plus, Printer, Share2, Clock, CheckCircle2, AlertOctagon, MinusCircle, Ban, ArrowLeft, Globe, Database, TriangleAlert } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip } from 'recharts';
 import { getRunResultsAction } from '@/app/actions/runs';
 import { UserAvatar } from '@/components/common/UserAvatar';
@@ -32,6 +32,7 @@ export default function RunReportPage() {
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+
 
   const getUser = (userId: number) => {
     const member = members.find((m: any) => m.userId === userId || m.user.id === userId);
@@ -74,24 +75,10 @@ export default function RunReportPage() {
     return results.reduce((sum, r) => sum + (r.totalTimeSpentSeconds || r.timeSpentSeconds || 0), 0);
   }, [results]);
 
-  const rerunResults = useMemo(() => {
-    return results.filter((r) => r.attemptNumber && r.attemptNumber > 1);
-  }, [results]);
-
-  const stats = useMemo(() => ({
-    total: results.length,
-    pass: results.filter((r) => r.status === 'pass').length,
-    fail: results.filter((r) => r.status === 'fail').length,
-    error: results.filter((r) => r.status === 'error').length,
-    blocked: results.filter((r) => r.status === 'blocked').length,
-    skip: results.filter((r) => r.status === 'skip').length,
-    invalid: results.filter((r) => r.status === 'invalid').length,
-  }), [results]);
-
   // Bugs data - collect all defects from results
   const allDefects = useMemo(() => {
     const defects: any[] = [];
-    results.forEach((r) => {
+    results.forEach((r: any) => {
       if (r.defects && r.defects.length > 0) {
         r.defects.forEach((d: any) => {
           defects.push({
@@ -105,27 +92,42 @@ export default function RunReportPage() {
     return defects;
   }, [results, allCases]);
 
-  const bugStats = useMemo(() => {
-    const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
-    allDefects.forEach((d) => {
-      const sev = (d.severity || '').toUpperCase();
-      if (counts[sev as keyof typeof counts] !== undefined) {
-        counts[sev as keyof typeof counts]++;
-      }
-    });
-    return counts;
-  }, [allDefects]);
+  const stats = useMemo(() => ({
+    total: results.length,
+    pass: results.filter((r) => r.status === 'pass').length,
+    fail: results.filter((r) => r.status === 'fail').length,
+    error: results.filter((r) => r.status === 'error').length,
+    blocked: results.filter((r) => r.status === 'blocked').length,
+    skip: results.filter((r) => r.status === 'skip').length,
+    invalid: results.filter((r) => r.status === 'invalid').length,
+  }), [results]);
+
+  const rerunResults = useMemo(() => {
+    return results.filter((r) => r.attemptNumber && r.attemptNumber > 1);
+  }, [results]);
+
+
+
+  const pendingCount = useMemo(() => {
+    return results.filter((r) => {
+      const status = String(r.status || '').toLowerCase();
+      return status === 'pending' || status === 'queued' || status === 'running' || r.caseState === 'QUEUED' || r.caseState === 'RUNNING';
+    }).length;
+  }, [results]);
+
+  const isRunInProgress = pendingCount > 0 && run.status?.toLowerCase() !== 'completed' && run.status?.toLowerCase() !== 'aborted';
 
   const effectiveRunStatus = useMemo(() => {
     if (!run) return { label: 'In Progress', color: 'blue' };
     if (run.status?.toLowerCase() === 'aborted') return { label: 'Aborted', color: 'zinc' };
+    if (isRunInProgress) return { label: 'In Progress', color: 'blue' };
     if (stats.fail > 0 || stats.error > 0) return { label: 'Failed', color: 'red' };
     if (stats.total > 0 && stats.pass + stats.invalid + stats.skip + stats.blocked + stats.error === stats.total) {
       return { label: 'Passed', color: 'green' };
     }
     if (run.status?.toLowerCase() === 'completed') return { label: 'Completed', color: 'green' };
     return { label: 'In Progress', color: 'blue' };
-  }, [run?.status, stats]);
+  }, [run?.status, stats, isRunInProgress]);
 
   if (!project || !run) return null;
 
@@ -355,9 +357,9 @@ export default function RunReportPage() {
           <ArrowLeft className="h-3.5 w-3.5 mr-1" /> Back to Run
         </Button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 print:hidden">
           <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(window.location.href); toast.success('Shareable report link copied!'); }}>
-            <Share2 className="h-3.5 w-3.5 mr-1.5" /> Copy Report Link
+            <Share2 className="h-3.5 w-3.5 mr-1.5" /> Share link
           </Button>
           <Button size="sm" onClick={() => window.print()} className="gradient-btn text-white">
             <Printer className="h-3.5 w-3.5 mr-1.5" /> Print Report
@@ -495,17 +497,17 @@ export default function RunReportPage() {
             <TriangleAlert className="h-3.5 w-3.5 text-red-500" />
             <span>Bugs ({allDefects.length})</span>
             <div className="flex items-center gap-2 ml-auto">
-              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", bugStats.CRITICAL > 0 ? "bg-red-500/10 text-red-500 border-red-500/30 border" : "bg-muted text-muted-foreground border-border")}>
-                Critical: {bugStats.CRITICAL}
+              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", 0 > 0 ? "bg-red-500/10 text-red-500 border-red-500/30 border" : "bg-muted text-muted-foreground border-border")}>
+                Critical: {0}
               </span>
-              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", bugStats.HIGH > 0 ? "bg-orange-500/10 text-orange-500 border-orange-500/30 border" : "bg-muted text-muted-foreground border-border")}>
-                High: {bugStats.HIGH}
+              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", 0 > 0 ? "bg-orange-500/10 text-orange-500 border-orange-500/30 border" : "bg-muted text-muted-foreground border-border")}>
+                High: {0}
               </span>
-              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", bugStats.MEDIUM > 0 ? "bg-amber-500/10 text-amber-500 border-amber-500/30 border" : "bg-muted text-muted-foreground border-border")}>
-                Medium: {bugStats.MEDIUM}
+              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", 0 > 0 ? "bg-amber-500/10 text-amber-500 border-amber-500/30 border" : "bg-muted text-muted-foreground border-border")}>
+                Medium: {0}
               </span>
-              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", bugStats.LOW > 0 ? "bg-blue-500/10 text-blue-500 border-blue-500/30 border" : "bg-muted text-muted-foreground border-border")}>
-                Low: {bugStats.LOW}
+              <span className={cn("px-2 py-0.5 rounded text-[10px] font-semibold", 0 > 0 ? "bg-blue-500/10 text-blue-500 border-blue-500/30 border" : "bg-muted text-muted-foreground border-border")}>
+                Low: {0}
               </span>
             </div>
           </CardTitle>
@@ -567,7 +569,7 @@ export default function RunReportPage() {
                             <span className="text-muted-foreground">—</span>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-xs font-medium text-foreground max-w-[300px] truncate print:break-inside-avoid" title={defect.title}>{defect.title}</td>
+                        <td className="px-3 py-2 text-xs font-medium text-foreground max-w-[250px] break-words print:break-inside-avoid print:max-w-none" title={defect.title}>{defect.title}</td>
                         <td className="px-3 py-2 text-[10px] font-semibold px-2 py-0.5 rounded-full border shrink-0 whitespace-nowrap print:break-inside-avoid"
                             style={{ backgroundColor: 'transparent' }}>
                           <span className={cn("inline-flex items-center gap-1", severityColors[severity] || "bg-muted text-muted-foreground border-border")}>
@@ -620,7 +622,6 @@ export default function RunReportPage() {
         </CardContent>
       </Card>
 
-      {/* Run Environment & Variable Snapshot */}
       {run.resolved_variables && Object.keys(run.resolved_variables).length > 0 && (
         <Card className="print:shadow-none print:border">
           <CardHeader className="py-2.5 px-5 border-b">
@@ -644,6 +645,28 @@ export default function RunReportPage() {
 
       {/* Main Results Table - Displaying All Cases Without Pagination */}
       <Card className="print:shadow-none print:border">
+          {isRunInProgress && (
+            <div className="mb-3 p-2 bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+              <p className="text-xs text-yellow-700 dark:text-yellow-300 font-medium">In progress · snapshot at {new Date().toLocaleString()} · {pendingCount} pending</p>
+              {pendingCount > 0 && (
+                <div className="mt-2 space-y-1">
+                  <p className="text-[10px] text-yellow-700 dark:text-yellow-300 font-semibold">Pending cases:</p>
+                  {results.filter(r => {
+                    const status = String(r.status || '').toLowerCase();
+                    return status === 'pending' || status === 'queued' || status === 'running' || r.caseState === 'QUEUED' || r.caseState === 'RUNNING';
+                  }).slice(0, 5).map((r, idx) => {
+                    const tc = getCase(r.testCaseId);
+                    return (
+                      <div key={idx} className="text-[10px] text-yellow-700 dark:text-yellow-300">
+                        • {tc?.displayId || r.testCaseId} {tc?.title ? `- ${tc.title}` : ''}
+                      </div>
+                    );
+                  })}
+                  {pendingCount > 5 && <p className="text-[10px] text-yellow-700 dark:text-yellow-300">... and {pendingCount - 5} more</p>}
+                </div>
+              )}
+            </div>
+          )}
         <CardHeader className="flex-row items-center justify-between flex-wrap gap-3 py-3 px-5 border-b">
           <div className="flex items-center gap-3">
             <CardTitle className="text-sm font-bold">Test Case Results ({filteredResults.length})</CardTitle>
@@ -677,48 +700,6 @@ export default function RunReportPage() {
           <DataTable data={filteredResults} columns={columns} getId={(row) => row.id} pagination={{ pageSize: 1000 }} />
         </CardContent>
       </Card>
-
-      {/* Re-runs & Attempt History Section */}
-      {rerunResults.length > 0 && (
-        <Card className="print:shadow-none print:border">
-          <CardHeader className="py-2.5 px-5 border-b">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <RotateCcw className="h-3.5 w-3.5 text-purple-500" />
-              <span>Re-run Test Cases & Attempt History ({rerunResults.length})</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 space-y-2">
-            {rerunResults.map((r) => {
-              const tc = getCase(r.testCaseId);
-              return (
-                <div key={r.id} className="group p-2.5 border border-border/50 rounded-lg bg-card/40 space-y-1.5 text-xs">
-                  <div className="flex items-center justify-between">
-                    {tc?.displayId ? (
-                      <Link
-                        href={`/p/${slug}/repository/${tc.displayId}`}
-                        className="flex items-center gap-2 font-medium hover:text-primary transition-colors cursor-pointer"
-                      >
-                        <span className="font-mono text-muted-foreground font-semibold">{tc.displayId}</span>
-                        <span className="font-semibold text-foreground group-hover:text-primary">{tc?.title}</span>
-                      </Link>
-                    ) : (
-                      <div className="flex items-center gap-2 font-medium">
-                        <span className="font-semibold text-foreground">{tc?.title || 'Test Case'}</span>
-                      </div>
-                    )}
-                    <ResultStatusBadge status={r.status} />
-                  </div>
-                  <div className="flex items-center gap-4 text-muted-foreground font-medium text-[11px]">
-                    <span>Current Attempt: <strong className="text-foreground">#{r.attemptNumber}</strong></span>
-                    <span>Time Spent: <strong className="font-mono text-foreground">{formatTimer(r.timeSpentSeconds)}</strong></span>
-                    {r.failureReason && <span>Failure Note: <em className="text-red-400 font-normal">{r.failureReason}</em></span>}
-                  </div>
-                </div>
-              );
-            })}
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

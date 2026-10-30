@@ -2,7 +2,8 @@
 
 import { FormEvent, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, Loader2, Zap } from 'lucide-react';
+import Image from 'next/image';
+import { AlertCircle, ArrowLeft, Loader2 } from 'lucide-react';
 import { requestPasswordResetAction } from '@/lib/auth/password-reset-actions';
 import styles from '../auth-pages.module.css';
 
@@ -39,8 +40,8 @@ export default function ForgotPasswordForm({ initialEmail }: { initialEmail: str
 
       <section className={styles.card}>
         <div className={styles.brand}>
-          <span className={styles.logo}><Zap size={18} strokeWidth={2.2} /></span>
-          <span>Inka<span className={styles.brandAccent}>Test</span></span>
+          <span className={styles.logo}><Image src="/logo.svg" alt="InkaTest" width={18} height={18} /></span>
+          <span className={styles.brandGradient}>InkaTest</span>
         </div>
 
         <h1 className={styles.title}>Reset Password</h1>

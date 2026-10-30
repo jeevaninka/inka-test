@@ -26,6 +26,11 @@ import {
   isTerminalResultStatus,
   EXECUTION_STATE,
 } from '@/lib/execution/state';
+import { loadRunResults } from '@/lib/runs/load-results';
+import {
+  hasRunEnvironmentDetails,
+  normalizeRunEnvironmentDetails,
+} from '@/lib/runs/environment';
 import { createRetryAttempts } from '@/lib/execution/attempts';
 import { reconcileRunState } from '@/lib/integrations/execution-monitor';
 import { skipRemainingCases, startRunCases, stopRun } from '@/lib/execution/coordinator';
@@ -149,6 +154,10 @@ export async function validateRunPlanAction(data: {
   };
 }
 
+/**
+ * Authorized entry point for the run deck: verifies the caller is a project
+ * viewer, then loads the results.
+ */
 export async function getRunResultsAction(runId: string) {
   const session = await getServerSession(authOptions);
   if (!session?.user) throw new Error('Unauthorized');
@@ -157,144 +166,7 @@ export async function getRunResultsAction(runId: string) {
   // Tenant guard: a run id must never be readable outside its project.
   await requireProjectMemberByRunId(runId, userId, 'VIEWER');
 
-  const results = await prisma.runResult.findMany({
-    where: { run_id: runId },
-    orderBy: [{ test_case_id: 'asc' }, { attempt_number: 'desc' }],
-    include: {
-      test_case: true,
-      defects: true,
-    },
-  });
-
-  // Deduplicate: one row per case. Normally that is the highest attempt, but
-  // bad imports/legacy writers can leave two rows for the same attempt (one
-  // PASS and one PENDING). A terminal outcome must win: the run did execute.
-  const byCase = new Map<string, (typeof results)[number]>();
-  for (const row of results) {
-    const current = byCase.get(row.test_case_id);
-    if (!current) {
-      byCase.set(row.test_case_id, row);
-      continue;
-    }
-    const currentAttempt = current.attempt_number || 1;
-    const nextAttempt = row.attempt_number || 1;
-    if (nextAttempt > currentAttempt) {
-      byCase.set(row.test_case_id, row);
-      continue;
-    }
-    if (nextAttempt < currentAttempt) continue;
-    const currentSettled = isTerminalResultStatus(current.status);
-    const nextSettled = isTerminalResultStatus(row.status);
-    if (!currentSettled && nextSettled) {
-      byCase.set(row.test_case_id, row);
-      continue;
-    }
-    if (currentSettled === nextSettled) {
-      const currentAt = new Date(current.executed_at || current.started_at || 0).getTime();
-      const nextAt = new Date(row.executed_at || row.started_at || 0).getTime();
-      if (nextAt > currentAt) byCase.set(row.test_case_id, row);
-    }
-  }
-  const latestResults = Array.from(byCase.values());
-
-  // Sort by order_index for display
-  latestResults.sort((a, b) => a.order_index - b.order_index);
-
-  // Canonical queue/lease state lives on the RunResult row. The legacy
-  // run_context.caseStates map is only a read-only fallback for runs that were
-  // created before the coordinator migration.
-  const runHeader = await prisma.testRun.findUnique({
-    where: { id: runId },
-    select: { run_context: true },
-  });
-  const legacyCaseStates = (((runHeader?.run_context as any)?.caseStates || {}) as Record<
-    string,
-    'QUEUED' | 'RUNNING'
-  >);
-  const queuePositions = computeQueuePositions(latestResults);
-
-  // Aggregate cumulative time & max attempt per test_case_id across all attempts
-  const totalTimeByCase = new Map<string, number>();
-  const attemptsByCase = new Map<string, number>();
-  const attemptHistoryByCase = new Map<string, Array<{ attemptNumber: number; timeSpentSeconds: number; status: string }>>();
-  for (const r of results) {
-    totalTimeByCase.set(r.test_case_id, (totalTimeByCase.get(r.test_case_id) || 0) + (r.time_spent_seconds || 0));
-    attemptsByCase.set(r.test_case_id, Math.max(attemptsByCase.get(r.test_case_id) || 0, r.attempt_number || 1));
-    if (!attemptHistoryByCase.has(r.test_case_id)) {
-      attemptHistoryByCase.set(r.test_case_id, []);
-    }
-    attemptHistoryByCase.get(r.test_case_id)!.push({
-      attemptNumber: r.attempt_number || 1,
-      timeSpentSeconds: r.time_spent_seconds || 0,
-      status: r.status.toLowerCase(),
-    });
-  }
-
-  const assigneeIds = [...new Set(latestResults.map((r) => r.assigned_to).filter(Boolean))] as number[];
-  const assignees = assigneeIds.length > 0
-    ? await prisma.user.findMany({ where: { id: { in: assigneeIds } }, select: { id: true, name: true, email: true, image: true } })
-    : [];
-  const assigneeMap = new Map(assignees.map((u) => [u.id, u]));
-
-  return latestResults.map((r) => {
-    const assignee = r.assigned_to ? assigneeMap.get(r.assigned_to) : null;
-    const caseAttempts = (attemptHistoryByCase.get(r.test_case_id) || []).sort((a, b) => b.attemptNumber - a.attemptNumber);
-    return {
-      id: r.id,
-      runId: r.run_id,
-      testCaseId: r.test_case_id,
-      testVersionId: r.test_version_id,
-      orderIndex: r.order_index,
-      attemptNumber: r.attempt_number,
-      status: r.status.toLowerCase(),
-      caseState: (() => {
-        const executionState = normalizeExecutionState(r.execution_state);
-        if (executionState === EXECUTION_STATE.QUEUED) return 'QUEUED';
-        if (
-          executionState === EXECUTION_STATE.RUNNING ||
-          executionState === EXECUTION_STATE.WAITING
-        ) {
-          return 'RUNNING';
-        }
-        return legacyCaseStates[r.id] || null;
-      })(),
-      executionState: normalizeExecutionState(r.execution_state),
-      queuePosition: queuePositions[r.id] ?? null,
-      queuedAt: r.queued_at?.toISOString() ?? null,
-      startedAt: r.started_at?.toISOString() ?? null,
-      finishedAt: r.finished_at?.toISOString() ?? null,
-      lastExecutionError: r.last_execution_error ?? null,
-      notes: r.notes,
-      evidenceUrl: r.evidence_url,
-      executedBy: r.executed_by,
-      executedAt: r.executed_at?.toISOString(),
-      stepResults: r.step_results,
-      iterationResults: r.iteration_results,
-      failureReason: r.failure_reason,
-      source: r.source,
-      automationLog: r.automation_log,
-      assignedTo: r.assigned_to,
-      assignedToName: assignee?.name ?? null,
-      assignedToAvatar: assignee?.image ?? null,
-      timeSpentSeconds: r.time_spent_seconds ?? 0,
-      totalTimeSpentSeconds: totalTimeByCase.get(r.test_case_id) ?? (r.time_spent_seconds ?? 0),
-      totalAttempts: attemptsByCase.get(r.test_case_id) ?? (r.attempt_number ?? 1),
-      attempts: caseAttempts,
-      defects: r.defects.map((d) => ({
-        id: d.id,
-        runResultId: d.run_result_id,
-        testCaseId: d.test_case_id,
-        title: d.title,
-        description: d.description,
-        severity: d.severity.toLowerCase(),
-        ticketUrl: d.ticket_url,
-        externalTicketId: d.external_ticket_id,
-        ticketStatus: d.ticket_status,
-        raisedBy: d.raised_by,
-        raisedAt: d.raised_at.toISOString(),
-      })),
-    };
-  });
+  return loadRunResults(runId);
 }
 
 /**
@@ -344,6 +216,8 @@ export async function getTestRunByIdAction(runId: string) {
     resolved_datasets: r.resolved_datasets,
     runContext: r.run_context || null,
     run_context: r.run_context || null,
+    customFields: r.custom_fields || {},
+    custom_fields: r.custom_fields || {},
     stopRequestedAt: r.stop_requested_at?.toISOString() ?? null,
     executionGeneration: r.execution_generation,
     results: (r.results || []).map((res: any) => ({
@@ -417,6 +291,8 @@ export async function createTestRunAction(data: {
   buildVersion?: string;
   assignedTo?: number;
   createdBy: number;
+  /** Where the run executed: platform / OS / browser / device / build + custom. */
+  environmentDetails?: Record<string, any>;
   testCaseIds?: string[];
   assignments?: Record<string, number>;
   iterationAssignments?: Record<string, Record<number, number>>;
@@ -629,6 +505,12 @@ export async function createTestRunAction(data: {
         source: data.source || 'manual',
         trigger_ref: data.triggerRef || null,
         run_context: data.config ? ({ config: data.config } as any) : undefined,
+        custom_fields: (() => {
+          const details = normalizeRunEnvironmentDetails(data.environmentDetails);
+          return hasRunEnvironmentDetails(details)
+            ? ({ environmentDetails: details } as any)
+            : ({} as any);
+        })(),
         status: 'IN_PROGRESS',
         started_at: new Date(),
         created_by: data.createdBy,
@@ -673,6 +555,8 @@ export async function createTestRunAction(data: {
     startedAt: run.started_at?.toISOString(),
     createdBy: run.created_by,
     createdAt: run.created_at.toISOString(),
+    customFields: run.custom_fields || {},
+    custom_fields: run.custom_fields || {},
   };
 }
 
@@ -700,9 +584,41 @@ export async function updateRunResultAction(
 
   const currentRow = await prisma.runResult.findUnique({
     where: { id },
-    select: { execution_state: true, source: true, status: true },
+    select: {
+      execution_state: true,
+      source: true,
+      status: true,
+      assigned_to: true,
+      executed_by: true,
+      run_id: true,
+      test_case: { select: { id: true, display_id: true, project_id: true } },
+      run: { select: { id: true, name: true } },
+    },
   });
   if (!currentRow) throw new Error('Result not found');
+
+  // Project-level restriction: only the assignee, project leads or admins may
+  // record a result. Enforced here on the server regardless of UI state.
+  const project = await prisma.project.findUnique({
+    where: { id: currentRow.test_case.project_id },
+    select: { restrict_result_recording: true, workspace_id: true },
+  });
+  const workspaceId = project?.workspace_id ?? null;
+  const isAssignee = currentRow.assigned_to != null && currentRow.assigned_to === userId;
+  let isLeadOrAdmin = false;
+  if (project?.restrict_result_recording && !isAssignee) {
+    try {
+      await requireProjectAdmin(currentRow.test_case.project_id, userId);
+      isLeadOrAdmin = true;
+    } catch {
+      isLeadOrAdmin = false;
+    }
+    if (!isLeadOrAdmin) {
+      throw new Error(
+        'Only the assignee, project leads or admins can record a result for this case.'
+      );
+    }
+  }
 
   // A manual verdict must not corrupt an automated execution that is still
   // owned by the provider (or by a running Postman request).
@@ -715,6 +631,8 @@ export async function updateRunResultAction(
       'This case is currently executing automatically. Wait for the result or stop the run before recording a manual verdict.'
     );
   }
+
+  const oldStatus = currentRow.status;
 
   const updateData: any = {
     executed_at: new Date(),
@@ -736,8 +654,7 @@ export async function updateRunResultAction(
     updateData.assigned_to = data.assignedTo;
   } else if (data.status !== undefined) {
     // Auto-assign to current tester if currently unassigned
-    const current = await prisma.runResult.findUnique({ where: { id }, select: { assigned_to: true } });
-    if (current && current.assigned_to === null) {
+    if (currentRow.assigned_to === null) {
       updateData.assigned_to = data.executedBy || userId;
     }
   }
@@ -747,7 +664,75 @@ export async function updateRunResultAction(
 
   await prisma.runResult.update({ where: { id }, data: updateData });
 
+  // Audit entry: actor, case, old → new result, whether the executor differed
+  // from the assignee.
+  const executor = data.executedBy ?? userId;
+  const differedFromAssignee = currentRow.assigned_to != null && currentRow.assigned_to !== executor;
+  await prisma.auditLog.create({
+    data: {
+      workspace_id: workspaceId!,
+      user_id: userId,
+      action: 'recordRunResult',
+      metadata: {
+        projectId: currentRow.test_case.project_id,
+        runId: currentRow.run_id,
+        runName: currentRow.run.name,
+        caseId: currentRow.test_case.id,
+        caseDisplayId: currentRow.test_case.display_id,
+        oldStatus,
+        newStatus: data.status ?? oldStatus,
+        executedBy: executor,
+        assignedTo: currentRow.assigned_to ?? null,
+        differedFromAssignee,
+      },
+    },
+  }).catch(() => null);
+
+  // Optional in-app notification to the assignee when a non-assignee records a
+  // result on their case.
+  if (
+    currentRow.assigned_to != null &&
+    currentRow.assigned_to !== userId &&
+    currentRow.assigned_to !== executor
+  ) {
+    await prisma.notification.create({
+      data: {
+        user_id: currentRow.assigned_to,
+        type: 'RESULT_RECORDED',
+        entity_type: 'RunResult',
+        entity_id: id,
+        action_url: `/p/${currentRow.test_case.project_id}/runs/${currentRow.run_id}/report`,
+        metadata: {
+          caseId: currentRow.test_case.id,
+          caseDisplayId: currentRow.test_case.display_id,
+          runId: currentRow.run_id,
+          runName: currentRow.run.name,
+          oldStatus,
+          newStatus: data.status ?? oldStatus,
+          recordedBy: userId,
+        },
+      },
+    }).catch(() => null);
+  }
+
   return true;
+}
+
+export async function getProjectExecutionSettingsAction(projectIdOrSlug: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) throw new Error('Unauthorized');
+
+  const userId = (session.user as any).id as number;
+  const actualProjectId = await requireProjectMember(projectIdOrSlug, userId);
+
+  const project = await prisma.project.findUnique({
+    where: { id: actualProjectId },
+    select: { restrict_result_recording: true },
+  });
+
+  return {
+    restrict_result_recording: project?.restrict_result_recording ?? false,
+  };
 }
 
 export async function finishRunAction(runId: string) {
@@ -1383,6 +1368,15 @@ export async function bulkRerunRunResultsAction(runId: string, resultIds: string
       test_case: { select: { type: true, custom_fields: true } },
     },
   });
+
+  // The rerunner owns the fresh attempts that nobody is assigned to.
+  await prisma.runResult
+    .updateMany({
+      where: { id: { in: created.createdIds }, assigned_to: null },
+      data: { assigned_to: uid },
+    })
+    .catch(() => {});
+
   const queueIds = createdRows
     .filter((row) => {
       const source = getCaseAutomationSource({
@@ -1473,8 +1467,8 @@ export async function bulkDeleteRunsAction(runIds: string[]) {
 
   // Validate all runs belong to projects the user can access
   const targetRuns = await prisma.testRun.findMany({
-    where: { id: { in: runIds } },
-    select: { project_id: true },
+    where: { id: { in: runIds }, deleted_at: null },
+    select: { id: true, project_id: true, name: true },
   });
   const uniqueProjectIds = [...new Set(targetRuns.map((r) => r.project_id))];
   for (const pid of uniqueProjectIds) {
@@ -1485,6 +1479,21 @@ export async function bulkDeleteRunsAction(runIds: string[]) {
     where: { id: { in: runIds }, deleted_at: null },
     data: { deleted_at: new Date() },
   });
+
+  // One audit row per archived run: the metrics drop is explainable later.
+  if (targetRuns.length > 0) {
+    await prisma.activityLog.createMany({
+      data: targetRuns.map((run) => ({
+        project_id: run.project_id,
+        user_id: uid,
+        actor_type: 'user',
+        action: `Archived test run "${run.name}"`,
+        entity_type: 'test_run',
+        entity_id: run.id,
+        metadata: { name: run.name, bulk: true } as any,
+      })),
+    });
+  }
 
   revalidatePath(`/p`);
   return true;
@@ -1726,6 +1735,7 @@ export async function updateTestRunAction(runId: string, data: {
   environment?: string;
   buildVersion?: string;
   assignedTo?: number | null;
+  environmentDetails?: Record<string, any>;
 }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) throw new Error('Unauthorized');
@@ -1742,6 +1752,17 @@ export async function updateTestRunAction(runId: string, data: {
   if (data.environment !== undefined) updateData.environment = data.environment;
   if (data.buildVersion !== undefined) updateData.build_version = data.buildVersion;
   if (data.assignedTo !== undefined) updateData.assigned_to = data.assignedTo;
+  if (data.environmentDetails !== undefined) {
+    // Merge so unrelated custom fields survive an environment edit.
+    const existing =
+      run.custom_fields && typeof run.custom_fields === 'object'
+        ? { ...(run.custom_fields as Record<string, any>) }
+        : {};
+    const details = normalizeRunEnvironmentDetails(data.environmentDetails);
+    if (hasRunEnvironmentDetails(details)) existing.environmentDetails = details;
+    else delete existing.environmentDetails;
+    updateData.custom_fields = existing;
+  }
 
   await prisma.testRun.update({ where: { id: runId }, data: updateData });
 
@@ -1784,10 +1805,23 @@ export async function addCasesToRunAction(runId: string, testCaseIds: string[]) 
   });
   let nextOrder = (maxOrder._max.order_index ?? -1) + 1;
 
+  // Lock each appended case to its current snapshot, exactly like cases picked
+  // at run creation, so a later edit is detectable from the deck.
+  const versionRows = await prisma.testCaseVersion.findMany({
+    where: { test_case_id: { in: newCases.map((c) => c.id) } },
+    orderBy: { version_number: 'desc' },
+    select: { id: true, test_case_id: true },
+  });
+  const versionMap = new Map<string, string>();
+  for (const v of versionRows) {
+    if (!versionMap.has(v.test_case_id)) versionMap.set(v.test_case_id, v.id);
+  }
+
   await prisma.runResult.createMany({
     data: newCases.map((tc) => ({
       run_id: runId,
       test_case_id: tc.id,
+      test_version_id: versionMap.get(tc.id) ?? null,
       order_index: nextOrder++,
       status: 'PENDING',
       attempt_number: 1,
@@ -1828,12 +1862,137 @@ export async function addCasesToRunAction(runId: string, testCaseIds: string[]) 
     });
   }
 
+  // Append + queue: when the run is already executing, the new cases join the
+  // queue instead of sitting idle until someone presses Start again.
+  const createdRows = await prisma.runResult.findMany({
+    where: { run_id: runId, test_case_id: { in: newCases.map((c) => c.id) } },
+    select: { id: true },
+  });
+  const activeStates = ['QUEUED', 'RUNNING', 'WAITING'];
+  const inFlight = await prisma.runResult.findFirst({
+    where: { run_id: runId, status: 'PENDING', execution_state: { in: activeStates } },
+    select: { id: true },
+  });
+  if (inFlight && createdRows.length > 0) {
+    await startRunCases({
+      runId,
+      actorId: uid,
+      resultIds: createdRows.map((r) => r.id),
+      mode: 'start',
+      startImmediately: true,
+    }).catch((error) => {
+      logger.warn('add-cases: could not queue appended cases', { runId, error });
+    });
+  }
+
   revalidatePath(`/p`);
-  return { added: newCases.length };
+  return { added: newCases.length, queued: inFlight ? createdRows.length : 0 };
 }
 
-export async function resetSingleResultAction(resultId: string, retryMode: 'all' | 'failed_only' = 'all') {
+/**
+ * Mark a manual case as started the first time its console is opened.
+ *
+ * Idempotent: the conditional write only lands while the case is undecided and
+ * has no start timestamp yet, so re-opening the console never moves the clock.
+ */
+export async function startManualResultAction(resultId: string) {
   const session = await getServerSession(authOptions);
+  if (!session?.user) throw new Error('Unauthorized');
+
+  const uid = (session.user as any).id as number;
+  await requireProjectMemberByRunResultId(resultId, uid);
+
+  const updated = await prisma.runResult.updateMany({
+    where: {
+      id: resultId,
+      status: 'PENDING',
+      started_at: null,
+      execution_state: 'IDLE',
+    },
+    data: { started_at: new Date() },
+  });
+
+  return { started: updated.count === 1 };
+}
+
+export async function reorderRunCasesAction(runId: string, orderedResultIds: string[]) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) throw new Error('Unauthorized');
+
+  const uid = (session.user as any).id as number;
+  await requireProjectMemberByRunId(runId, uid);
+
+  if (!Array.isArray(orderedResultIds) || orderedResultIds.length === 0) {
+    throw new Error('No cases to reorder');
+  }
+
+  const run = await prisma.testRun.findUnique({
+    where: { id: runId },
+    select: { id: true, status: true },
+  });
+  if (!run) throw new Error('Run not found');
+
+  const rows = await prisma.runResult.findMany({
+    where: { run_id: runId },
+    select: { id: true, status: true, execution_state: true, order_index: true, test_case_id: true, attempt_number: true },
+    orderBy: [{ order_index: 'asc' }, { id: 'asc' }],
+  });
+
+  // Latest attempt per case is the row that owns a position.
+  const latestByCase = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) {
+    const current = latestByCase.get(row.test_case_id);
+    if (!current || (row.attempt_number || 1) >= (current.attempt_number || 1)) {
+      latestByCase.set(row.test_case_id, row);
+    }
+  }
+  const latestRows = [...latestByCase.values()].sort(
+    (a, b) => (a.order_index ?? 0) - (b.order_index ?? 0)
+  );
+
+  // Reordering is only meaningful for a run that is not executing anything and
+  // only for cases that have not been run yet. Executed rows never move.
+  const activeStates = [EXECUTION_STATE.RUNNING, EXECUTION_STATE.WAITING, EXECUTION_STATE.QUEUED] as string[];
+  const hasActive = latestRows.some(
+    (row) => row.status === 'PENDING' && activeStates.includes(row.execution_state as string)
+  );
+  if (hasActive) {
+    throw new Error('Stop the run before changing the execution order');
+  }
+
+  const movable = latestRows.filter(
+    (row) => row.status === 'PENDING' && row.execution_state === EXECUTION_STATE.IDLE
+  );
+  const movableIds = new Set(movable.map((row) => row.id));
+
+  if (
+    orderedResultIds.length !== movableIds.size ||
+    new Set(orderedResultIds).size !== orderedResultIds.length ||
+    orderedResultIds.some((id) => !movableIds.has(id))
+  ) {
+    throw new Error('Only not-run cases can be reordered');
+  }
+
+  if (movable.length < 2) return { reordered: 0 };
+
+  // Fill the movable slots in the requested order, leaving executed rows exactly
+  // where they are so history stays readable.
+  const queue = [...orderedResultIds];
+  const finalOrder = latestRows.map((row) =>
+    movableIds.has(row.id) ? queue.shift()! : row.id
+  );
+
+  await prisma.$transaction(
+    finalOrder.map((id, index) =>
+      prisma.runResult.update({ where: { id }, data: { order_index: index + 1 } })
+    )
+  );
+
+  revalidatePath(`/p`);
+  return { reordered: movable.length };
+}
+
+export async function resetSingleResultAction(resultId: string, retryMode: 'all' | 'failed_only' = 'all') {  const session = await getServerSession(authOptions);
   if (!session?.user) throw new Error('Unauthorized');
 
   const uid = (session.user as any).id as number;
@@ -1857,6 +2016,14 @@ export async function resetSingleResultAction(resultId: string, retryMode: 'all'
   if (created.createdIds.length === 0) {
     throw new Error('Could not create a new attempt for this case');
   }
+
+  // Whoever queues the retry owns the case when nobody is assigned to it.
+  await prisma.runResult
+    .updateMany({
+      where: { id: { in: created.createdIds }, assigned_to: null },
+      data: { assigned_to: uid },
+    })
+    .catch(() => {});
 
   revalidatePath('/p');
   return { newResultId: created.createdIds[0] };
@@ -1884,9 +2051,23 @@ export async function archiveTestRunAction(id: string) {
   const uid = (session.user as any).id as number;
   await requireProjectMemberByRunId(id, uid);
 
-  await prisma.testRun.update({
+  const run = await prisma.testRun.update({
     where: { id },
     data: { deleted_at: new Date() },
+    select: { id: true, name: true, project_id: true },
+  });
+
+  // Archiving removes a run from every metric, so it must be auditable.
+  await prisma.activityLog.create({
+    data: {
+      project_id: run.project_id,
+      user_id: uid,
+      actor_type: 'user',
+      action: `Archived test run "${run.name}"`,
+      entity_type: 'test_run',
+      entity_id: run.id,
+      metadata: { name: run.name },
+    },
   });
 
   revalidatePath(`/p`);
@@ -1948,9 +2129,22 @@ export async function restoreTestRunAction(id: string) {
   const uid = (session.user as any).id as number;
   await requireProjectMemberByRunId(id, uid);
 
-  await prisma.testRun.update({
+  const run = await prisma.testRun.update({
     where: { id },
     data: { deleted_at: null },
+    select: { id: true, name: true, project_id: true },
+  });
+
+  await prisma.activityLog.create({
+    data: {
+      project_id: run.project_id,
+      user_id: uid,
+      actor_type: 'user',
+      action: `Restored test run "${run.name}"`,
+      entity_type: 'test_run',
+      entity_id: run.id,
+      metadata: { name: run.name },
+    },
   });
 
   revalidatePath(`/p`);

@@ -1,7 +1,7 @@
 import ResetPasswordForm from './ResetPasswordForm';
 import { getPasswordResetTokenState } from '@/lib/auth/password-reset';
 import Link from 'next/link';
-import { Zap } from 'lucide-react';
+import Image from 'next/image';
 import styles from '../auth-pages.module.css';
 
 export const metadata = {
@@ -28,8 +28,8 @@ export default async function ResetPasswordPage({
 
       <section className={styles.card}>
         <div className={styles.brand}>
-          <span className={styles.logo}><Zap size={18} strokeWidth={2.2} /></span>
-          <span>Inka<span className={styles.brandAccent}>Test</span></span>
+          <span className={styles.logo}><Image src="/logo.svg" alt="InkaTest" width={18} height={18} /></span>
+          <span className={styles.brandGradient}>InkaTest</span>
         </div>
 
         {state === 'VALID' ? (

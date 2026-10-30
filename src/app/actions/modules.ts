@@ -101,19 +101,43 @@ export async function deleteModuleAction(id: string) {
   if (!mod) throw new Error('Module not found');
   await requireProjectMember(mod.project_id, userId);
 
+  // Deleting a module never deletes test cases. Cases are re-homed:
+  // - sub-module  -> its parent module (fallback: root / "No Module")
+  // - root module -> root / "No Module"
+  // Sub-modules of a deleted root module are promoted to root instead of removed.
+  const fallbackModuleId = mod.parent_id ?? null;
+
+  const [movedCases, promotedSubmodules] = await Promise.all([
+    prisma.testCase.count({ where: { module_id: id } }),
+    prisma.module.count({ where: { parent_id: id } }),
+  ]);
+
+  await prisma.$transaction([
+    prisma.testCase.updateMany({
+      where: { module_id: id },
+      data: { module_id: fallbackModuleId },
+    }),
+    prisma.module.updateMany({
+      where: { parent_id: id },
+      data: { parent_id: null },
+    }),
+    prisma.module.delete({ where: { id } }),
+  ]);
+
   await prisma.activityLog.create({
     data: {
       project_id: mod.project_id,
       user_id: userId,
-      action: `Deleted module "${mod.name}"`,
+      action: `Deleted module "${mod.name}" (${movedCases} case${movedCases === 1 ? '' : 's'} moved to ${
+        fallbackModuleId ? 'parent module' : 'No Module'
+      }${promotedSubmodules > 0 ? `, ${promotedSubmodules} sub-module${promotedSubmodules === 1 ? '' : 's'} promoted to root` : ''})`,
       entity_type: 'module',
       entity_id: id,
     },
   }).catch(() => null);
 
-  await prisma.module.delete({ where: { id } });
   revalidatePath(`/p`);
-  return true;
+  return { movedCases, promotedSubmodules, fallbackModuleId };
 }
 
 export async function updateModuleAction(id: string, data: { name?: string; parentId?: string | null }) {

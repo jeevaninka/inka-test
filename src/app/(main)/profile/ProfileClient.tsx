@@ -289,7 +289,7 @@ export function ProfileClient({ user, prefs, initialWorkspace = null }: ProfileC
               <Button
                 onClick={handleSave}
                 disabled={isSaving || !hasChanges}
-                className="btn-glow px-8"
+                className="gradient-btn text-white px-8"
               >
                 {isSaving ? 'Saving...' : 'Save Changes'}
               </Button>

@@ -4,8 +4,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
-import { ChevronDown, ChevronRight, Upload, X, CheckCircle2, Sparkles, Loader2, Link2, Layers, Folder, Tag } from 'lucide-react';
-import { importTestCasesAction } from '@/app/actions/cases';
+import { ChevronDown, ChevronRight, Upload, X, CheckCircle2, Sparkles, Loader2, Link2, Layers, Folder, Tag, FileText, AlertTriangle } from 'lucide-react';
+import { importTestCasesAction, findExistingCaseTitlesAction } from '@/app/actions/cases';
 import { createModuleAction } from '@/app/actions/modules';
 import { enrichTestCasesWithAIAction } from '@/app/actions/ai';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
@@ -244,9 +244,19 @@ export function ImportTestCasesDialog({ open, onOpenChange, projectId, onSuccess
   const parseFile = async (selectedFile: File) => {
     setIsParsing(true);
     try {
-      const data = await selectedFile.arrayBuffer();
+      const isCsv = /\.csv$/i.test(selectedFile.name) || selectedFile.type === 'text/csv';
+      let workbook: any;
+      if (isCsv) {
+        // CSV is parsed by the same sheet reader, from text rather than bytes.
+        const text = await selectedFile.text();
+        const XLSX = await import('xlsx');
+        workbook = XLSX.read(text, { type: 'string', raw: true });
+      } else {
+        const data = await selectedFile.arrayBuffer();
+        const XLSX = await import('xlsx');
+        workbook = XLSX.read(data);
+      }
       const XLSX = await import('xlsx');
-      const workbook = XLSX.read(data);
       const firstSheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[firstSheetName];
 
@@ -488,7 +498,50 @@ export function ImportTestCasesDialog({ open, onOpenChange, projectId, onSuccess
       });
 
       const casesArray = Array.from(caseMap.values());
+
+      // Duplicate detection: same title twice in the file, or a case that
+      // already exists in the project. Duplicates stay visible but start
+      // deselected so a CSV import never silently doubles the repository.
+      const normalizeTitle = (value: string) =>
+        String(value || '').toLowerCase().replace(/\s+/g, ' ').replace(/[—–-]/g, '-').trim();
+      const seenTitles = new Map<string, number>();
+      casesArray.forEach((c, index) => {
+        const key = normalizeTitle(c.title);
+        const first = seenTitles.get(key);
+        if (first !== undefined) {
+          (c as any).duplicateOf = casesArray[first]?._id || `row ${first + 1}`;
+          (c as any).duplicateReason = 'Same title earlier in this file';
+          c.selected = false;
+        } else {
+          seenTitles.set(key, index);
+        }
+      });
+
       setParsedCases(casesArray.map(c => ({ ...c, _originalCase: JSON.parse(JSON.stringify(c)) })));
+
+      try {
+        const existing = await findExistingCaseTitlesAction(
+          projectId,
+          casesArray.map((c) => c.title)
+        );
+        if (existing.length > 0) {
+          const byTitle = new Map(existing.map((e) => [normalizeTitle(e.title), e]));
+          setParsedCases((prev) =>
+            prev.map((c) => {
+              const hit = byTitle.get(normalizeTitle(c.title));
+              if (!hit) return c;
+              return {
+                ...c,
+                selected: false,
+                duplicateOf: `${hit.displayId}`,
+                duplicateReason: 'Already in this project',
+              } as any;
+            })
+          );
+        }
+      } catch {
+        // Duplicate detection is best-effort; the import itself is unaffected.
+      }
     } catch (error) {
       logger.error('Failed to parse imported test cases file', {
         component: 'ImportTestCasesDialog',
@@ -717,7 +770,7 @@ export function ImportTestCasesDialog({ open, onOpenChange, projectId, onSuccess
             </span>
           </DialogTitle>
           <DialogDescription>
-            Upload an Excel file (.xlsx or .xls) to import test cases in bulk. 
+            Upload an Excel file (.xlsx / .xls) or a CSV to import test cases in bulk. 
             Synonyms are automatically mapped (e.g. "Test Case" or "Test Scenario" to Title; "Test Steps" to Step), and AI will predict priorities and tags in the background.
           </DialogDescription>
         </DialogHeader>
@@ -729,13 +782,58 @@ export function ImportTestCasesDialog({ open, onOpenChange, projectId, onSuccess
               onClick={() => fileInputRef.current?.click()}
             >
               <Upload className="h-10 w-10 text-muted-foreground mb-4" />
-              <h3 className="font-medium mb-1">Click to upload Excel file</h3>
-              <p className="text-sm text-muted-foreground">.xlsx or .xls</p>
+              <h3 className="font-medium mb-1">Click to upload a file</h3>
+              <p className="text-sm text-muted-foreground">.xlsx, .xls or .csv</p>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const header = [
+                    'Title',
+                    'Priority',
+                    'Type',
+                    'Status',
+                    'Module',
+                    'Tags',
+                    'Preconditions',
+                    'Step',
+                    'Data',
+                    'Expected Result',
+                  ];
+                  const example = [
+                    'Login with a valid email',
+                    'P1',
+                    'Manual',
+                    'Draft',
+                    'Authentication',
+                    'auth,smoke',
+                    'A verified account exists',
+                    'Enter the email and password, then submit',
+                    'user@example.com / Passw0rd!',
+                    'The dashboard is shown',
+                  ];
+                  const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+                  const csv = [header, example]
+                    .map((row) => row.map(escape).join(','))
+                    .join('\n');
+                  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                  const url = URL.createObjectURL(blob);
+                  const link = document.createElement('a');
+                  link.href = url;
+                  link.download = 'test-cases-template.csv';
+                  link.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline cursor-pointer"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                Download CSV template
+              </button>
               <input
                 type="file"
                 ref={fileInputRef}
                 onChange={handleFileChange}
-                accept=".xlsx, .xls"
+                accept=".xlsx, .xls, .csv, text/csv"
                 className="hidden"
               />
             </div>
@@ -761,8 +859,7 @@ export function ImportTestCasesDialog({ open, onOpenChange, projectId, onSuccess
                         </span>
                       )}
                     </h3>
-                    <p className="text-xs text-muted-foreground">{parsedCases.length} cases found</p>
-                  </div>
+                    <p className="text-xs text-muted-foreground">{parsedCases.length} cases found</p>                  </div>
                 </div>
                 <Button variant="outline" size="sm" onClick={resetState}>
                   <X className="h-4 w-4 mr-1" /> Remove
@@ -946,12 +1043,6 @@ export function ImportTestCasesDialog({ open, onOpenChange, projectId, onSuccess
                     title="Customize AI prompt or column mapping hints"
                   >
                     <span>{showCustomAiPrompt ? 'Custom' : 'Auto'}</span>
-                    <ChevronDown
-                      className={cn(
-                        'h-3 w-3 transition-transform duration-150',
-                        showCustomAiPrompt && 'rotate-180'
-                      )}
-                    />
                   </button>
                 </div>
               </div>
@@ -1021,6 +1112,26 @@ export function ImportTestCasesDialog({ open, onOpenChange, projectId, onSuccess
               )}
 
               <div className="flex-1 overflow-y-auto border border-border/50 rounded-md">
+                {(() => {
+                  const duplicates = parsedCases.filter((c: any) => Boolean(c.duplicateReason));
+                  if (duplicates.length === 0) return null;
+                  return (
+                    <div className="flex items-center justify-between gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        {duplicates.length} row{duplicates.length === 1 ? '' : 's'} look like duplicates and
+                        {' '}start deselected
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setParsedCases((prev) => prev.map((c) => ({ ...c, selected: true })))}
+                        className="shrink-0 text-[11px] font-medium text-primary hover:underline cursor-pointer"
+                      >
+                        Select them anyway
+                      </button>
+                    </div>
+                  );
+                })()}
                 {parsedCases.length === 0 ? (
                   <div className="p-8 text-center text-muted-foreground">
                     No valid test cases found in the file. Make sure the file has a "Title" or "Test Case" column.
@@ -1046,6 +1157,15 @@ export function ImportTestCasesDialog({ open, onOpenChange, projectId, onSuccess
                           
                           <div className="flex-1 min-w-0 flex items-center gap-3" onClick={() => toggleExpandCase(tc._id)}>
                             <span className="font-medium text-sm truncate">{tc.title}</span>
+                            {(tc as any).duplicateReason && (
+                              <span
+                                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                                title={`${(tc as any).duplicateReason} — ${(tc as any).duplicateOf || ''}`}
+                              >
+                                <AlertTriangle className="h-2.5 w-2.5" />
+                                {(tc as any).duplicateReason}
+                              </span>
+                            )}
                             <PriorityBadge priority={tc.priority as any} />
                             <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
                               <ModuleSelect

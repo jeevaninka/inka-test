@@ -21,6 +21,7 @@ export interface SplitButtonProps {
   className?: string;
   size?: 'sm' | 'default';
   align?: 'left' | 'right';
+  menuPlacement?: 'bottom' | 'top';
   variant?: 'primary' | 'primary-gradient';
 }
 
@@ -33,6 +34,7 @@ export function SplitButton({
   items,
   className,
   size = 'sm',
+  menuPlacement = 'bottom',
   variant = 'primary',
 }: SplitButtonProps) {
   const [isOpen, setIsOpen] = React.useState(false);
@@ -141,7 +143,10 @@ export function SplitButton({
       {/* Standalone Dialed-In Floating Dropdown Panel */}
       {isOpen && (
         <div
-          className="absolute top-full right-0 min-w-[205px] mt-[6px] z-50 bg-popover/95 dark:bg-[#0a1217]/95 backdrop-blur-xl border border-teal-700/20 dark:border-teal-400/25 rounded-xl shadow-xl shadow-black/15 dark:shadow-black/50 p-1 flex flex-col gap-0.5 animate-in fade-in-0 zoom-in-95 duration-100"
+          className={cn(
+            'absolute right-0 min-w-[205px] z-50 bg-popover/95 dark:bg-[#0a1217]/95 backdrop-blur-xl border border-teal-700/20 dark:border-teal-400/25 rounded-xl shadow-xl shadow-black/15 dark:shadow-black/50 p-1 flex flex-col gap-0.5 animate-in fade-in-0 zoom-in-95 duration-100',
+            menuPlacement === 'top' ? 'bottom-full mb-[6px]' : 'top-full mt-[6px]'
+          )}
         >
           {items.map((item, idx) => (
             <button

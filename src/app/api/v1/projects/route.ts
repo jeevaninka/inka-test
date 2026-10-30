@@ -22,7 +22,12 @@ export async function GET(req: Request) {
   }
 
   try {
-    const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+    // The session already carries the numeric user id; only fall back to an
+    // email lookup for sessions issued before that claim existed.
+    const sessionUserId = (session.user as any).id as number | undefined;
+    const user = sessionUserId
+      ? { id: sessionUserId }
+      : await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return apiErrorResponse('User not found', 404, ErrorCodes.NOT_FOUND, requestId);
 
     // Verify user belongs to workspace

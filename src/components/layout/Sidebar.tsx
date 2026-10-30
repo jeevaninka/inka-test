@@ -5,12 +5,11 @@ import { useProjectData } from '@/components/providers/ProjectDataProvider';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
+import Image from 'next/image';
 import { apiClient } from '@/lib/apiClient';
 import { useMobileSidebar } from '@/components/providers/MobileSidebarProvider';
 import { UserAvatar } from '@/components/common/UserAvatar';
 import { Tooltip } from '@/components/ui/tooltip';
-import { motion } from 'framer-motion';
-import { MOTION } from '@/lib/motion';
 import {
   LayoutDashboard,
   FolderOpen,
@@ -25,7 +24,7 @@ import {
   Users,
   UserPlus,
   ShieldCheck,
-  Sparkles,
+  Sparkles, // kept for future use
   ClipboardCheck,
   AlertTriangle,
   PanelLeftClose,
@@ -36,6 +35,7 @@ import {
   X,
   Search,
   Folder,
+  Menu,
 } from 'lucide-react';
 
 export interface WorkspaceState {
@@ -299,11 +299,11 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
           {/* Left Rail: Main Navigation Icons (56px) */}
           <aside className="w-14 bg-card/95 border-r border-border/60 flex flex-col items-center py-3 select-none shrink-0 h-full">
             <button
-              onClick={() => { router.push('/workspace'); setMobileOpen(false); }}
-              className="w-9 h-9 rounded-xl gradient-btn flex items-center justify-center shadow-glow-sm hover:scale-105 transition-transform cursor-pointer mb-3 shrink-0"
-              title="InkaTest Workspace"
+              onClick={() => setMobileOpen(false)}
+              className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-muted transition-colors cursor-pointer mb-3 shrink-0 overflow-hidden"
+              title="Close menu"
             >
-              <Sparkles className="h-4 w-4 text-white" />
+              <Menu className="h-5 w-5" />
             </button>
 
             <nav className="flex-1 overflow-y-auto space-y-1.5 scrollbar-none w-full px-1.5">
@@ -351,8 +351,9 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
             </button>
           </aside>
 
-          {/* Right Panel: Modules Tree & Project Scope (256px) */}
-          <section className="w-64 bg-background/95 backdrop-blur-xl flex flex-col h-full border-r border-border/60 overflow-hidden">
+          {/* Right Panel: Modules Tree & Project Scope (256px) - Only show on repository page */}
+          {isProjectContext && currentPath.includes('/repository') && (
+            <section className="w-64 bg-background/95 backdrop-blur-xl flex flex-col h-full border-r border-border/60 overflow-hidden">
             {/* Header: Project / Section Name + Close */}
             <div className="px-3.5 py-3 border-b border-border/50 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2 min-w-0">
@@ -544,6 +545,7 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
               </div>
             )}
           </section>
+          )}
         </div>
       )}
 
@@ -558,7 +560,7 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
       <div className="relative flex h-full flex-col">
         {/* InkaTest Logo - Click to go to active workspace & Collapse button */}
         <div className={cn(
-          "border-b border-border/50 py-3 flex items-center",
+          "border-b border-border/60 h-14 flex items-center",
           isCollapsed ? "flex-col gap-2 px-2" : "justify-between px-3"
         )}>
           <button
@@ -566,15 +568,15 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
             className="flex items-center gap-2.5 group shrink-0"
             title="InkaTest Workspace"
           >
-            <div className="w-8 h-8 rounded-lg gradient-btn flex items-center justify-center shadow-glow-sm group-hover:shadow-glow-md transition-shadow duration-300">
-              <Sparkles className="h-4 w-4 text-white" />
+            <div className="w-8 h-8 rounded-lg overflow-hidden shadow-glow-sm group-hover:shadow-glow-md transition-shadow duration-300">
+              <Image src="/logo.svg" alt="InkaTest" width={32} height={32} className="w-8 h-8 object-cover" />
             </div>
             {!isCollapsed && <span className="text-lg font-bold gradient-text">InkaTest</span>}
           </button>
 
           <button
             onClick={toggleCollapse}
-            className="hidden md:flex w-10 h-10 shrink-0 p-1 text-muted-foreground hover:text-foreground rounded-xl hover:bg-muted/60 transition-all cursor-pointer shadow-sm border border-transparent hover:border-border"
+            className="hidden md:flex w-8 h-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:text-teal-500 hover:bg-[#E6F3F0] transition-colors cursor-pointer"
             title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
             aria-label={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
           >
@@ -583,7 +585,7 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
         </div>
 
         {isProjectContext ? (
-          <div className={cn("relative border-b border-border/50", isCollapsed ? "p-2 flex justify-center" : "p-3")}>
+          <div className={cn("relative border-b border-border/60 h-14 flex items-center", isCollapsed ? "justify-center px-2" : "px-3")}>
             {isCollapsed ? (
               <Tooltip content={project?.name || 'Switch Project'} side="right">
                 <button
@@ -605,14 +607,13 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
                     <FolderKanban className="h-4 w-4 text-primary" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className="truncate font-semibold text-sm">{project?.name || 'Select Project'}</h3>
-                    <p className="truncate text-xs text-muted-foreground font-mono">{project?.slug}</p>
+                    <p className="truncate text-sm font-semibold text-foreground">{project?.name || 'Project'}</p>
                   </div>
                 </div>
                 <ChevronDown
                   className={cn(
-                    'h-4 w-4 text-muted-foreground shrink-0 transition-transform duration-200',
-                    showProjectSwitcher && 'rotate-180 text-primary'
+                    "h-4 w-4 text-muted-foreground transition-transform shrink-0",
+                    showProjectSwitcher && "rotate-180"
                   )}
                 />
               </button>
@@ -645,8 +646,7 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
                           <FolderKanban className="h-4 w-4 text-primary" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="font-medium text-sm truncate">{p.name}</p>
-                          <p className="text-xs text-muted-foreground font-mono">{p.slug}</p>
+                          <p className="truncate text-sm font-medium text-foreground">{p.name}</p>
                         </div>
                         <ChevronRight className="h-4 w-4 text-muted-foreground/0 group-hover:text-muted-foreground transition-all shrink-0" />
                       </button>
@@ -656,7 +656,7 @@ export function Sidebar({ collapsed = false, initialWorkspace = null }: SidebarP
             )}
           </div>
         ) : isWorkspaceContext ? (
-          <div className={cn("relative border-b border-border/50", isCollapsed ? "p-2 flex justify-center" : "p-3")}>
+          <div className={cn("relative border-b border-border/60 h-14 flex items-center", isCollapsed ? "justify-center px-2" : "px-3")}>
             <div className="flex flex-col gap-2.5 w-full">
               {isCollapsed ? (
                 <Tooltip content={workspace?.name || ''} side="right">

@@ -1,10 +1,9 @@
 import Link from 'next/link';
-import { Zap } from 'lucide-react';
+import Image from 'next/image';
 import styles from './legal.module.css';
 
 export const metadata = {
   title: 'Legal — InkaTest',
-  description: 'InkaTest terms of service and privacy policy.',
 };
 
 export default function LegalLayout({ children }: { children: React.ReactNode }) {
@@ -17,8 +16,8 @@ export default function LegalLayout({ children }: { children: React.ReactNode })
 
       <header className={styles.header}>
         <Link className={styles.brand} href="/login">
-          <span className={styles.logo}><Zap size={17} strokeWidth={2.2} /></span>
-          <span>Inka<span className={styles.brandAccent}>Test</span></span>
+          <span className={styles.logo}><Image src="/logo.svg" alt="InkaTest" width={32} height={32} /></span>
+          <span className={styles.brandGradient}>InkaTest</span>
         </Link>
         <nav className={styles.nav}>
           <Link href="/legal/terms">Terms of Service</Link>
@@ -30,7 +29,9 @@ export default function LegalLayout({ children }: { children: React.ReactNode })
       <main className={styles.main}>{children}</main>
 
       <footer className={styles.footer}>
-        <div>© {new Date().getFullYear()} InkaTest. All rights reserved.</div>
+        <div>
+          © {new Date().getFullYear()} Karnodakshayi Insurance Pvt Ltd. All rights reserved.
+        </div>
         <div className={styles.footerLinks}>
           <Link href="/legal/terms">Terms of Service</Link>
           <Link href="/legal/privacy">Privacy Policy</Link>

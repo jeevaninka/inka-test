@@ -11,6 +11,8 @@ import {
   isMonitorExpired,
   deriveOverallFromExecutions,
   buildExternalResultFromExecutions,
+  providerNotExecutedEntries,
+  describeProviderNotExecuted,
   DEFAULT_POLL_INTERVAL_MS,
   MAX_POLL_INTERVAL_MS,
   type MonitorExecutionRecord,
@@ -334,5 +336,51 @@ describe('buildExternalResultFromExecutions', () => {
     expect(result.stepResults['1'].status).toBe('unavailable');
     expect(result.summary).toMatch(/result unavailable/i);
     expect(result.summary).not.toMatch(/failed/i);
+  });
+
+  it('settles a provider-skipped test as SKIP instead of pending', () => {
+    const reason = 'Datadog skipped this test because it is paused in Datadog.';
+    const result = buildExternalResultFromExecutions({
+      executions: [record({ status: 'skip', resultId: '', durationMs: 0, failureMessage: reason })],
+      batchId: 'batch-1',
+      environment: 'UAT',
+      executionRule: 'blocking',
+      startedAtMs,
+    });
+
+    expect(result.overallStatus).toBe('SKIP');
+    expect(result.stepResults['1'].status).toBe('skip');
+    expect(result.summary).toMatch(/not executed/i);
+    expect(result.summary).toContain(reason);
+  });
+});
+
+describe('Datadog batch entries that never produce a result', () => {
+  const snapshot = {
+    results: [
+      { publicId: 'ran', resultId: 'rid-1', status: 'passed' },
+      { publicId: 'paused', resultId: '', status: 'skipped' },
+      { publicId: 'queued', resultId: '', status: 'missed' },
+      { publicId: 'interrupted', resultId: '', status: 'interrupted' },
+      { publicId: 'running', resultId: '', status: 'in_progress' },
+    ],
+    raw: {},
+  };
+
+  it('detects only the entries Datadog decided not to execute', () => {
+    expect(providerNotExecutedEntries(snapshot).map((e) => e.publicId)).toEqual([
+      'paused',
+      'queued',
+      'interrupted',
+    ]);
+  });
+
+  it('names the concrete cause when the provider reports a skip', () => {
+    expect(describeProviderNotExecuted('skipped', { paused: true })).toMatch(/paused in Datadog/i);
+    expect(
+      describeProviderNotExecuted('skipped', { paused: false, ciExecutionRule: 'skipped' })
+    ).toMatch(/CI execution rule is 'skipped'/i);
+    expect(describeProviderNotExecuted('missed')).toMatch(/batch window/i);
+    expect(describeProviderNotExecuted('interrupted')).toMatch(/interrupted/i);
   });
 });

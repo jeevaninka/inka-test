@@ -178,7 +178,7 @@ export function AttachmentUploader({
                 <Button
                   onClick={handleExternalLink}
                   disabled={!externalUrl.trim() || isUploading}
-                  className="flex-1 h-10 rounded-xl btn-glow"
+                  className="flex-1 h-10 rounded-xl gradient-btn text-white"
                 >
                   {isUploading ? (
                     <>

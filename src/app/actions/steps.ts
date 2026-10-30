@@ -13,6 +13,7 @@ import {
   requireProjectMemberByReusableStepId,
 } from '@/lib/permissions';
 import { logger } from '@/lib/logger';
+import { snapshotTestCaseVersion } from '@/lib/cases/versioning';
 
 async function getAuthorizedUser(): Promise<{ userId: number; user: any }> {
   const session = await getServerSession(authOptions);
@@ -666,6 +667,10 @@ export async function saveTestCaseStepsBulkAction(data: {
         )
       );
     }
+
+    // Saving steps is a content change: snapshot the new state so runs that
+    // locked an older version can flag the case as updated.
+    await snapshotTestCaseVersion(tx, data.testCaseId, userId);
   });
 
   return prisma.testCaseStep.findMany({

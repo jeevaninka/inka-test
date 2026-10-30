@@ -247,7 +247,7 @@ export function InviteClient({
                 <Button
                   onClick={handleAccept}
                   disabled={isAccepting}
-                  className="w-full h-12 rounded-xl text-base font-semibold btn-glow"
+                  className="w-full h-12 rounded-xl text-base font-semibold gradient-btn text-white"
                 >
                   {isAccepting ? (
                     <span className="flex items-center gap-2">
@@ -429,7 +429,7 @@ export function InviteClient({
                   <Button
                     type="submit"
                     disabled={authBusy}
-                    className="w-full h-11 rounded-xl font-semibold btn-glow"
+                    className="w-full h-11 rounded-xl font-semibold gradient-btn text-white"
                   >
                     {authBusy ? (
                       <Loader2 className="h-4 w-4 animate-spin" />

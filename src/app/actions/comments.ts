@@ -100,6 +100,30 @@ export async function createCommentAction(data: {
         caseUrl = `/p/${tc.project.slug}/repository/${tc.display_id}`;
         entityLabel = `[${tc.display_id}] ${tc.title}`;
       }
+    } else if (data.entity_type === 'run') {
+      const run = await prisma.testRun.findUnique({
+        where: { id: data.entity_id },
+        select: { name: true, project: { select: { slug: true } } },
+      });
+      if (run) {
+        caseUrl = `/p/${run.project.slug}/runs/${data.entity_id}`;
+        entityLabel = `Run "${run.name}"`;
+      }
+    } else if (data.entity_type === 'run_result') {
+      const rr = await prisma.runResult.findUnique({
+        where: { id: data.entity_id },
+        select: {
+          run_id: true,
+          test_case: { select: { display_id: true, title: true } },
+          run: { select: { name: true, project: { select: { slug: true } } } },
+        },
+      });
+      if (rr) {
+        caseUrl = `/p/${rr.run.project.slug}/runs/${rr.run_id}?resultId=${data.entity_id}`;
+        entityLabel = rr.test_case
+          ? `[${rr.test_case.display_id}] ${rr.test_case.title}`
+          : `Case in run "${rr.run.name}"`;
+      }
     }
 
     // Create notification if assigned

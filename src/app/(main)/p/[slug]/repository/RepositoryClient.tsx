@@ -5,7 +5,7 @@ import React, { useState, useMemo, useEffect, useCallback, Fragment, useRef } fr
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown, Folder, FolderOpen, Plus, Search, PanelLeft, PanelLeftClose, PanelLeftOpen, Sparkles, Edit2, Trash2, Maximize2, AppWindow, PanelRight, ArrowDownToLine, ArrowUpFromLine, SlidersHorizontal, Calendar, X, RotateCcw, Tag, Layers, MoreHorizontal, CornerDownRight, GripVertical, Check, FileText, User, Cpu, ArrowUpDown, Copy, Loader2 as LoaderIcon, Lock, Unlock } from 'lucide-react';
+import { ChevronRight, ChevronLeft, ChevronDown, ChevronUp, ChevronsUpDown, Folder, FolderOpen, Plus, Search, PanelLeft, PanelLeftClose, PanelLeftOpen, Sparkles, Edit2, Trash2, Maximize2, AppWindow, PanelRight, ArrowDownToLine, ArrowUpFromLine, SlidersHorizontal, Calendar, X, RotateCcw, Tag, Layers, MoreHorizontal, CornerDownRight, GripVertical, Check, FileText, User, Cpu, ArrowUpDown, Copy, Loader2 as LoaderIcon, Lock, Unlock, Play, ListChecks } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { TagsManagerModal } from '@/components/cases/TagsManagerModal';
 import { BulkAddTagsModal } from '@/components/cases/BulkAddTagsModal';
@@ -65,6 +65,7 @@ const GenerateTestCasesDialog = dynamic(() => import('@/components/cases/Generat
 
 import { ConfirmModal } from '@/components/common/ConfirmModal';
 import { Tooltip } from '@/components/ui/tooltip';
+import { buildModuleCaseCounts } from '@/lib/repository/module-counts';
 
 export function RepositoryClient({
   initialCases,
@@ -106,6 +107,8 @@ export function RepositoryClient({
   const modules = initialModules || contextModules;
   const customFieldDefs = initialCustomFieldDefs || contextCustomFieldDefs;
   const { setOpen: setMobileOpen } = useMobileSidebar();
+  // Mobile module drawer (the tree is a sidebar at ≥768px).
+  const [modulesSheetOpen, setModulesSheetOpen] = useState(false);
 
   const currentMember = members?.find((m: any) => m.userId === currentUser?.id);
   const currentUserRole = (currentMember?.role || '').toUpperCase();
@@ -118,6 +121,11 @@ export function RepositoryClient({
     moduleFromQuery === 'no-module' || moduleFromQuery === 'none' ? 'no-module' : moduleFromQuery || null
   );
   const [selectedSubmodule, setSelectedSubmodule] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Picking a module closes the mobile drawer so the case list is visible.
+    setModulesSheetOpen(false);
+  }, [selectedModule, selectedSubmodule]);
 
   // Sync selected module with external selection / URL query
   useEffect(() => {
@@ -225,7 +233,114 @@ export function RepositoryClient({
   const [dateFilterField, setDateFilterField] = useState<'updated' | 'created'>('updated');
   const [isAllCasesDragOver, setIsAllCasesDragOver] = useState(false);
   const [isNoModuleDragOver, setIsNoModuleDragOver] = useState(false);
+
+  // A8 — filters persist per user and project until Reset (or a different
+  // user signs in, which resolves to a different storage key).
+  const filterStorageKey =
+    project?.id && currentUser?.id
+      ? `inka:repo-filters:${project.id}:${currentUser.id}`
+      : null;
+  const [filtersReady, setFiltersReady] = useState(false);
+
+  useEffect(() => {
+    if (!filterStorageKey) {
+      setFiltersReady(true);
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(filterStorageKey);
+      const saved = raw ? JSON.parse(raw) : null;
+      if (saved && typeof saved === 'object') {
+        if (Array.isArray(saved.priority)) setPriorityFilters(saved.priority);
+        if (Array.isArray(saved.status)) setStatusFilters(saved.status);
+        if (Array.isArray(saved.author)) setAuthorFilters(saved.author);
+        if (Array.isArray(saved.tag)) setTagFilters(saved.tag);
+        if (Array.isArray(saved.visibleKeys)) setVisibleFilterKeys(saved.visibleKeys);
+        if (typeof saved.type === 'string') setTypeFilter(saved.type);
+        if (typeof saved.reviewStatus === 'string') setReviewStatusFilter(saved.reviewStatus);
+        if (typeof saved.scenario === 'string') setScenarioFilter(saved.scenario);
+        if (typeof saved.ticket === 'string') setTicketKeyFilter(saved.ticket);
+        if (typeof saved.source === 'string') setSourceFilter(saved.source);
+        if (typeof saved.createdFrom === 'string') setCreatedFrom(saved.createdFrom);
+        if (typeof saved.createdTo === 'string') setCreatedTo(saved.createdTo);
+        if (typeof saved.createdPreset === 'string') setCreatedPreset(saved.createdPreset);
+        if (typeof saved.updatedFrom === 'string') setUpdatedFrom(saved.updatedFrom);
+        if (typeof saved.updatedTo === 'string') setUpdatedTo(saved.updatedTo);
+        if (typeof saved.updatedPreset === 'string') setUpdatedPreset(saved.updatedPreset);
+        if (saved.dateField === 'created' || saved.dateField === 'updated') setDateFilterField(saved.dateField);
+        if (saved.customFields && typeof saved.customFields === 'object') setCustomFieldFilters(saved.customFields);
+        if (typeof saved.locked === 'boolean') setIsFilterLocked(saved.locked);
+      }
+    } catch {
+      /* corrupt payload: start from defaults */
+    }
+    setFiltersReady(true);
+  }, [filterStorageKey]);
+
+  useEffect(() => {
+    if (!filterStorageKey || !filtersReady) return;
+    try {
+      window.localStorage.setItem(
+        filterStorageKey,
+        JSON.stringify({
+          priority: priorityFilters,
+          status: statusFilters,
+          author: authorFilters,
+          tag: tagFilters,
+          visibleKeys: visibleFilterKeys,
+          type: typeFilter,
+          reviewStatus: reviewStatusFilter,
+          scenario: scenarioFilter,
+          ticket: ticketKeyFilter,
+          source: sourceFilter,
+          createdFrom,
+          createdTo,
+          createdPreset,
+          updatedFrom,
+          updatedTo,
+          updatedPreset,
+          dateField: dateFilterField,
+          customFields: customFieldFilters,
+          locked: isFilterLocked,
+        })
+      );
+    } catch {
+      /* storage may be unavailable (private mode) */
+    }
+  }, [
+    filterStorageKey,
+    filtersReady,
+    priorityFilters,
+    statusFilters,
+    authorFilters,
+    tagFilters,
+    visibleFilterKeys,
+    typeFilter,
+    reviewStatusFilter,
+    scenarioFilter,
+    ticketKeyFilter,
+    sourceFilter,
+    createdFrom,
+    createdTo,
+    createdPreset,
+    updatedFrom,
+    updatedTo,
+    updatedPreset,
+    dateFilterField,
+    customFieldFilters,
+    isFilterLocked,
+  ]);
   const noModuleCasesCount = useMemo(() => allCases.filter((c: any) => !c.moduleId).length, [allCases]);
+  // Parent badges roll up their descendants so collapsing a branch never hides
+  // work. Sub-modules read the same map, so every level shows its subtree total.
+  const moduleCaseCounts = useMemo(
+    () => buildModuleCaseCounts(modules as any[], allCases as any[]),
+    [modules, allCases]
+  );
+  const moduleTotalCount = useCallback(
+    (moduleId: string) => moduleCaseCounts.get(moduleId)?.total ?? 0,
+    [moduleCaseCounts]
+  );
   const [showFilterPopover, setShowFilterPopover] = useState(false);
   const [showTagsModal, setShowTagsModal] = useState(false);
   const [showBulkAddTagsModal, setShowBulkAddTagsModal] = useState(false);
@@ -263,6 +378,33 @@ export function RepositoryClient({
 
   const automationCounts = useMemo(() => getAutomationFilterCounts(allCases), [allCases]);
 
+  /**
+   * Resolve the cases that belong to the currently selected module, including
+   * every descendant module. Used by the bulk bar so "Select all" matches the
+   * count the tree already shows for that module.
+   */
+  const selectedModuleCaseIds = useMemo(() => {
+    if (!selectedModule) return [] as string[];
+    if (selectedModule === 'no-module') {
+      return allCases.filter((c: any) => !c.moduleId).map((c: any) => c.id);
+    }
+    const childIds = new Set<string>([selectedModule]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const m of modules as any[]) {
+        const parent = m.parentId || m.parent_id || null;
+        if (parent && childIds.has(parent) && !childIds.has(m.id)) {
+          childIds.add(m.id);
+          grew = true;
+        }
+      }
+    }
+    return allCases
+      .filter((c: any) => c.moduleId && childIds.has(c.moduleId))
+      .map((c: any) => c.id);
+  }, [selectedModule, allCases, modules]);
+
   const activeFiltersCount = useMemo(() => {
     let count = 0;
     count += priorityFilters.length;
@@ -280,6 +422,11 @@ export function RepositoryClient({
   }, [priorityFilters, statusFilters, authorFilters, tagFilters, typeFilter, reviewStatusFilter, scenarioFilter, ticketKeyFilter, sourceFilter, createdFrom, createdTo, createdPreset, updatedFrom, updatedTo, updatedPreset, customFieldFilters]);
 
   const clearAllFilters = () => {
+    if (filterStorageKey) {
+      try {
+        window.localStorage.removeItem(filterStorageKey);
+      } catch {}
+    }
     setPriorityFilters([]);
     setStatusFilters([]);
     setAuthorFilters([]);
@@ -806,6 +953,29 @@ export function RepositoryClient({
     }
   };
 
+  const handleBulkRestoreCases = async () => {
+    if (selectedCaseIds.size === 0) return;
+    const ids = Array.from(selectedCaseIds);
+    try {
+      await Promise.all(ids.map((id) => restoreTestCaseAction(id)));
+      const restored = archivedCases
+        .filter((c) => selectedCaseIds.has(c.id))
+        .map((c) => {
+          const active = { ...c };
+          delete active.archivedAt;
+          delete (active as any).updatedAt;
+          return active;
+        });
+      setArchivedCases(archivedCases.filter((c) => !selectedCaseIds.has(c.id)));
+      const existing = new Set(allCases.map((c) => c.id));
+      setCases([...restored.filter((c) => !existing.has(c.id)), ...allCases]);
+      setSelectedCaseIds(new Set());
+      toast.success(`Restored ${ids.length} case${ids.length === 1 ? '' : 's'}`);
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to restore cases');
+    }
+  };
+
   const fetchArchivedCases = async () => {
     if (!project) return;
     setLoadingArchived(true);
@@ -1133,6 +1303,19 @@ export function RepositoryClient({
   const casesByModule = useMemo(() => {
     if (statusFilters.length > 0) return null;
 
+    // Counts follow the current filters, and roll up descendants so a parent
+    // badge matches the sum of the rows visible beneath it.
+    const filteredDirectCount = (moduleId: string) =>
+      filteredCases.filter((c: any) => c.moduleId === moduleId).length;
+    const filteredSubtreeCount = (moduleId: string): number => {
+      const children = modules.filter((m: any) => m.parentId === moduleId);
+      return (
+        filteredDirectCount(moduleId) +
+        children.reduce((sum: number, child: any) => sum + filteredSubtreeCount(child.id), 0)
+      );
+    };
+
+
     if (selectedModule !== null) {
       if (selectedModule === 'no-module' || selectedModule === 'none') {
         const noModCases = filteredCases.filter((c: any) => !c.moduleId);
@@ -1154,6 +1337,7 @@ export function RepositoryClient({
             name: sm.name,
             parentId: parentMod.id,
             cases: filteredCases.filter((c: any) => c.moduleId === sm.id),
+            totalCasesCount: filteredSubtreeCount(sm.id),
           }));
 
         if (submodules.length > 0 && selectedSubmodule === null) {
@@ -1163,7 +1347,7 @@ export function RepositoryClient({
             name: parentMod.name,
             directCases,
             submodules,
-            totalCasesCount: directCases.length + submodules.reduce((sum: number, sm: any) => sum + sm.cases.length, 0),
+            totalCasesCount: filteredSubtreeCount(parentMod.id),
           }];
         }
       }
@@ -1181,8 +1365,9 @@ export function RepositoryClient({
           name: sm.name,
           parentId: rootMod.id,
           cases: filteredCases.filter((c: any) => c.moduleId === sm.id),
+          totalCasesCount: filteredSubtreeCount(sm.id),
         }));
-      const totalCasesCount = directCases.length + submodules.reduce((sum: number, sm: any) => sum + sm.cases.length, 0);
+      const totalCasesCount = filteredSubtreeCount(rootMod.id);
 
       if (totalCasesCount > 0 || submodules.length > 0) {
         groups.push({
@@ -1403,19 +1588,64 @@ export function RepositoryClient({
 
   const handleDeleteModule = (id: string) => {
     const targetModule = modules.find((m: any) => m.id === id);
+    const isSubmodule = !!targetModule?.parentId;
+    const parentModule = isSubmodule
+      ? modules.find((m: any) => m.id === targetModule?.parentId)
+      : null;
+    const childModules = modules.filter((m: any) => m.parentId === id);
+    const caseCount = allCases.filter((c: any) => c.moduleId === id).length;
+    const destination = isSubmodule && parentModule
+      ? `"${parentModule.name}"`
+      : 'No Module';
+
+    const effects: string[] = [];
+    if (childModules.length > 0) {
+      effects.push(
+        `${childModules.length} sub-module${childModules.length === 1 ? '' : 's'} will become top-level module${childModules.length === 1 ? '' : 's'}`
+      );
+    }
+    if (caseCount > 0) {
+      effects.push(
+        `${caseCount} test case${caseCount === 1 ? '' : 's'} will be moved to ${destination}`
+      );
+    }
+
     setConfirmConfig({
       open: true,
-      title: 'Delete Module',
-      description: `Are you sure you want to delete module "${targetModule?.name || 'this module'}"? Cases in this module will be moved to root. This action cannot be undone.`,
+      title: isSubmodule ? 'Delete Sub-module' : 'Delete Module',
+      description: `Are you sure you want to delete ${
+        isSubmodule ? 'sub-module' : 'module'
+      } "${targetModule?.name || 'this module'}"?${
+        effects.length ? ` ${effects.join(' · ')}.` : ''
+      } Test cases are never deleted. This action cannot be undone.`,
       variant: 'destructive',
       requireTypedConfirmation: 'DELETE',
       onConfirm: async () => {
         try {
-          await deleteModuleAction(id);
-          setModules(modules.filter((m: any) => m.id !== id));
-          setCases(allCases.map((c: any) => (c.moduleId === id ? { ...c, moduleId: null } : c)));
-          if (selectedModule === id) setSelectedModule(null);
-          toast.success('Module deleted');
+          const result = await deleteModuleAction(id);
+          const fallbackId = result?.fallbackModuleId ?? null;
+
+          setModules(
+            modules
+              .filter((m: any) => m.id !== id)
+              .map((m: any) => (m.parentId === id ? { ...m, parentId: null } : m))
+          );
+          setCases(
+            allCases.map((c: any) =>
+              c.moduleId === id ? { ...c, moduleId: fallbackId } : c
+            )
+          );
+          if (selectedModule === id) setSelectedModule(fallbackId);
+
+          const moved = result?.movedCases ?? 0;
+          const promoted = result?.promotedSubmodules ?? 0;
+          toast.success(
+            `Module deleted${
+              moved > 0
+                ? ` · ${moved} case${moved === 1 ? '' : 's'} moved to ${destination}`
+                : ''
+            }${promoted > 0 ? ` · ${promoted} sub-module${promoted === 1 ? '' : 's'} promoted` : ''}`
+          );
         } catch (err: any) {
           toast.error(err.message);
         }
@@ -1528,7 +1758,7 @@ export function RepositoryClient({
     {
       id: 'displayId',
       header: 'ID',
-      className: 'w-[88px] pl-1 pr-2 shrink-0',
+      className: 'w-[88px] pl-1 pr-2 shrink-0 max-sm:sticky max-sm:left-[46px] max-sm:z-[1] max-sm:bg-card',
       accessor: (row: any) => (
         <a
           href={`/p/${slug}/repository/${row.displayId}`}
@@ -1550,7 +1780,7 @@ export function RepositoryClient({
     {
       id: 'title',
       header: 'Title',
-      className: 'w-full min-w-[280px] pl-2 pr-4',
+      className: 'w-full min-w-[160px] sm:min-w-[280px] pl-2 pr-4',
       sortValue: (row: any) => (row.title || '').toLowerCase(),
       accessor: (row: any) => {
         const normStatus = (row.status || '').toLowerCase();
@@ -1715,12 +1945,25 @@ export function RepositoryClient({
     {
       id: 'archivedAt',
       header: 'Archived',
-      className: 'w-24 xl:w-[15%] shrink-0 text-center',
-      accessor: (row: any) => (
-        <span className="text-xs text-muted-foreground">
-          {row.archivedAt ? new Date(row.archivedAt).toLocaleDateString() : '-'}
-        </span>
-      ),
+      className: 'w-32 xl:w-[15%] shrink-0 text-center',
+      accessor: (row: any) => {
+        const stamp = row.archivedAt || row.updatedAt;
+        const byName =
+          row.archivedByName ||
+          (row.archivedBy
+            ? members?.find(
+                (m: any) => String(m.userId) === String(row.archivedBy) || String(m.user?.id) === String(row.archivedBy)
+              )?.user?.name
+            : null);
+        return (
+          <span className="inline-flex flex-col items-center leading-tight">
+            <span className="text-xs text-muted-foreground">
+              {stamp ? new Date(stamp).toLocaleDateString() : '-'}
+            </span>
+            {byName && <span className="text-[10px] text-muted-foreground/70">{byName}</span>}
+          </span>
+        );
+      },
       sortable: true,
     },
     {
@@ -1729,19 +1972,20 @@ export function RepositoryClient({
       className: 'w-[90px] shrink-0 text-right',
       accessor: (row: any) => (
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
-          className="btn-glow text-green-600 hover:text-green-700"
+          className="h-7 px-2.5 text-xs font-medium gap-1.5 border-border/60 hover:bg-muted cursor-pointer"
           onClick={(e) => {
             e.stopPropagation();
             handleRestoreCase(row.id);
           }}
         >
-          Restore
+          <RotateCcw className="h-3 w-3" />
+          <span>Restore</span>
         </Button>
       ),
     },
-  ], [archivedCases]);
+  ], [archivedCases, members]);
 
 
   const filterPanelHeader = (
@@ -1789,7 +2033,7 @@ export function RepositoryClient({
   );
 
   const filterPanelBody = (
-    <div className="px-3.5 py-3 grid grid-cols-[70px_1fr] items-center gap-y-3">
+    <div className="px-3.5 py-3 grid grid-cols-[96px_1fr] items-center gap-y-3">
       {/* Priority */}
       <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Priority</label>
       <div className="flex items-center gap-1 flex-wrap">
@@ -2109,88 +2353,20 @@ export function RepositoryClient({
     </div>
   );
 
-  return (
-    <div className="flex">
-      {/* Module Tree - Desktop */}
-      <aside className={cn(
-        "sticky top-14 self-start shrink-0 border-r bg-surface h-[calc(100vh-56px)] overflow-y-auto overflow-x-hidden hidden md:block transition-all duration-300 z-20",
-        modulesCollapsed ? "w-12" : "w-52 xl:w-60"
-      )}>
-        <div className="p-3 border-b flex items-center justify-between">
-          {!modulesCollapsed && <h3 className="font-medium text-sm">Modules</h3>}
-          <div className="flex items-center gap-1.5 ml-auto">
-            {!modulesCollapsed && canEdit && (
+
+  const moduleTreeBody = (
+    <div className="p-2 pb-24">
               <button
-                onClick={() => setShowCreateModuleModal(true)}
-                className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mr-1 cursor-pointer"
-                title="Create Module"
-              >
-                <Plus className="h-3.5 w-3.5" /> Module
-              </button>
-            )}
-            <button
-              onClick={() => setModulesCollapsed(!modulesCollapsed)}
-              className="w-10 h-10 shrink-0 p-1 text-muted-foreground hover:text-foreground rounded-xl hover:bg-muted transition-all cursor-pointer shadow-sm border border-transparent hover:border-border"
-              aria-label={modulesCollapsed ? "Expand Modules" : "Collapse Modules"}
-              title={modulesCollapsed ? "Expand Modules" : "Collapse Modules"}
-            >
-              {modulesCollapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
-            </button>
-          </div>
-        </div>
-
-        {!modulesCollapsed ? (
-          <div className="p-2 pb-24">
-            <button
-              onClick={() => setSelectedModule(null)}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                if (!isAllCasesDragOver) setIsAllCasesDragOver(true);
-              }}
-              onDragLeave={() => setIsAllCasesDragOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsAllCasesDragOver(false);
-                try {
-                  const raw = e.dataTransfer.getData('application/json');
-                  if (raw) {
-                    const parsed = JSON.parse(raw);
-                    if (parsed?.caseIds) {
-                      handleMoveCasesToModule(parsed.caseIds, null);
-                    }
-                  }
-                } catch {}
-              }}
-              className={cn(
-                "w-full text-left px-3 py-2 rounded-xl text-sm flex items-center justify-between transition-colors cursor-pointer mb-2",
-                isAllCasesDragOver && "ring-2 ring-inset ring-primary bg-primary/15 text-primary",
-                !isAllCasesDragOver && selectedModule === null
-                  ? "bg-primary/10 text-primary font-semibold border-l-2 border-primary shadow-2xs"
-                  : !isAllCasesDragOver && "hover:bg-muted text-foreground/80"
-              )}
-            >
-              <span className="text-left font-medium">All Cases</span>
-              <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-muted/60 text-muted-foreground font-semibold">
-                {allCases.length}
-              </span>
-            </button>
-
-            <div className="h-px bg-border/40 mx-1 mb-1.5" />
-
-            {/* Without Module (Aligned with ModuleItem rows inside the module list) */}
-            {noModuleCasesCount > 0 && (
-              <div
-                onClick={() => { setSelectedModule('no-module'); setSelectedSubmodule(null); }}
+                onClick={() => setSelectedModule(null)}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = 'move';
-                  if (!isNoModuleDragOver) setIsNoModuleDragOver(true);
+                  if (!isAllCasesDragOver) setIsAllCasesDragOver(true);
                 }}
-                onDragLeave={() => setIsNoModuleDragOver(false)}
+                onDragLeave={() => setIsAllCasesDragOver(false)}
                 onDrop={(e) => {
                   e.preventDefault();
-                  setIsNoModuleDragOver(false);
+                  setIsAllCasesDragOver(false);
                   try {
                     const raw = e.dataTransfer.getData('application/json');
                     if (raw) {
@@ -2202,71 +2378,156 @@ export function RepositoryClient({
                   } catch {}
                 }}
                 className={cn(
-                  "group flex items-center h-8 min-h-[32px] max-h-[32px] px-2 rounded-xl cursor-pointer text-xs transition-colors relative overflow-hidden",
-                  isNoModuleDragOver && "ring-1 ring-inset ring-primary bg-primary/10 text-primary",
-                  !isNoModuleDragOver && selectedModule === 'no-module'
+                  "w-full text-left px-3 py-2 rounded-xl text-sm flex items-center justify-between transition-colors cursor-pointer mb-2",
+                  isAllCasesDragOver && "ring-2 ring-inset ring-primary bg-primary/15 text-primary",
+                  !isAllCasesDragOver && selectedModule === null
                     ? "bg-primary/10 text-primary font-semibold border-l-2 border-primary shadow-2xs"
-                    : !isNoModuleDragOver && "hover:bg-primary/[0.09] dark:hover:bg-white/[0.07] text-foreground/85 hover:text-foreground"
+                    : !isAllCasesDragOver && "hover:bg-muted text-foreground/80"
                 )}
               >
-                {canEdit && <span className="w-3.5 h-3.5 shrink-0" />}
-                <span className="w-4 h-4 shrink-0" />
-                <div className="flex-1 flex items-center gap-1.5 text-left min-w-0 pr-2">
-                  <Folder className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
-                  <TruncatedText text="Without Module" className="font-medium text-xs text-foreground/90 flex-1 min-w-0" />
-                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-muted/60 text-muted-foreground font-medium shrink-0 ml-auto">
-                    {noModuleCasesCount}
-                  </span>
-                </div>
-              </div>
-            )}
+                <span className="text-left font-medium">All Cases</span>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-muted/60 text-muted-foreground font-semibold">
+                  {allCases.length}
+                </span>
+              </button>
 
-            {(() => {
-              const getRecursiveCaseCount = (moduleId: string): number => {
-                const direct = allCases.filter((c: any) => c.moduleId === moduleId).length;
-                const children = getChildModules(moduleId);
-                return direct + children.reduce((sum, child) => sum + getRecursiveCaseCount(child.id), 0);
-              };
-              return rootModules.map((module: any, i: number) => (
-                <ModuleItem
-                  key={module.id}
-                  module={module}
-                  childModules={getChildModules(module.id)}
-                  allModules={modules}
-                  selectedModule={selectedModule}
-                  onSelect={(id) => { setSelectedModule(id); setSelectedSubmodule(null); }}
-                  getCaseCount={getRecursiveCaseCount}
-                  onRename={handleRenameModule}
-                  onDelete={handleDeleteModule}
-                  onReorder={handleReorderModule}
-                  onDragReorder={handleDragReorderModule}
-                  onAddSubmodule={(parentId) => {
-                    setModuleParentId(parentId);
-                    setShowCreateModuleModal(true);
+              <div className="h-px bg-border/40 mx-1 mb-1.5" />
+
+              {/* Without Module (Aligned with ModuleItem rows inside the module list) */}
+              {noModuleCasesCount > 0 && (
+                <div
+                  onClick={() => { setSelectedModule('no-module'); setSelectedSubmodule(null); }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    if (!isNoModuleDragOver) setIsNoModuleDragOver(true);
                   }}
-                  onMoveCases={handleMoveCasesToModule}
-                  index={i}
-                  total={rootModules.length}
-                  readOnly={!canEdit}
-                />
-              ));
-            })()}
+                  onDragLeave={() => setIsNoModuleDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsNoModuleDragOver(false);
+                    try {
+                      const raw = e.dataTransfer.getData('application/json');
+                      if (raw) {
+                        const parsed = JSON.parse(raw);
+                        if (parsed?.caseIds) {
+                          handleMoveCasesToModule(parsed.caseIds, null);
+                        }
+                      }
+                    } catch {}
+                  }}
+                  className={cn(
+                    "group flex items-center h-8 min-h-[32px] max-h-[32px] px-2 rounded-xl cursor-pointer text-xs transition-colors relative overflow-hidden",
+                    isNoModuleDragOver && "ring-1 ring-inset ring-primary bg-primary/10 text-primary",
+                    !isNoModuleDragOver && selectedModule === 'no-module'
+                      ? "bg-primary/10 text-primary font-semibold border-l-2 border-primary shadow-2xs"
+                      : !isNoModuleDragOver && "hover:bg-primary/[0.09] dark:hover:bg-white/[0.07] text-foreground/85 hover:text-foreground"
+                  )}
+                >
+                  {canEdit && <span className="w-3.5 h-3.5 shrink-0" />}
+                  <span className="w-4 h-4 shrink-0" />
+                  <div className="flex-1 flex items-center gap-1.5 text-left min-w-0 pr-2">
+                    <Folder className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
+                    <TruncatedText text="Without Module" className="font-medium text-xs text-foreground/90 flex-1 min-w-0" />
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-muted/60 text-muted-foreground font-medium shrink-0 ml-auto">
+                      {noModuleCasesCount}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {(() => {
+                return rootModules.map((module: any, i: number) => (
+                  <ModuleItem
+                    key={module.id}
+                    module={module}
+                    childModules={getChildModules(module.id)}
+                    allModules={modules}
+                    selectedModule={selectedModule}
+                    onSelect={(id) => { setSelectedModule(id); setSelectedSubmodule(null); }}
+                    getCaseCount={moduleTotalCount}
+                    onRename={handleRenameModule}
+                    onDelete={handleDeleteModule}
+                    onReorder={handleReorderModule}
+                    onDragReorder={handleDragReorderModule}
+                    onAddSubmodule={(parentId) => {
+                      setModuleParentId(parentId);
+                      setShowCreateModuleModal(true);
+                    }}
+                    onMoveCases={handleMoveCasesToModule}
+                    index={i}
+                    total={rootModules.length}
+                    readOnly={!canEdit}
+                  />
+                ));
+              })()}
+    </div>
+  );
+  return (
+    <div className="flex">
+      {/* Module Tree - Desktop */}
+      <aside className={cn(
+        "module-sidebar-scroll sticky top-14 self-start shrink-0 border-r bg-surface h-[calc(100vh-56px)] overflow-y-auto overflow-x-hidden hidden md:block transition-all duration-300 z-20",
+        modulesCollapsed ? "w-[56px]" : "w-56 xl:w-60"
+      )}>
+        <div className={cn(
+          "border-b flex items-center h-14",
+          modulesCollapsed ? "justify-center px-2" : "justify-between px-3"
+        )}>
+          {modulesCollapsed ? (
+            <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">MODULES</span>
+          ) : (
+            <h3 className="font-medium text-sm">Modules</h3>
+          )}
+          {!modulesCollapsed && (
+            <div className="flex items-center gap-1.5 ml-auto">
+              {canEdit && (
+                <button
+                  onClick={() => setShowCreateModuleModal(true)}
+                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mr-1 cursor-pointer"
+                  title="Create Module"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Module
+                </button>
+              )}
+              <button
+                onClick={() => setModulesCollapsed(!modulesCollapsed)}
+                className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:text-teal-500 hover:bg-[#E6F3F0] transition-colors cursor-pointer"
+                aria-label={modulesCollapsed ? "Expand Modules" : "Collapse Modules"}
+                title={modulesCollapsed ? "Expand Modules" : "Collapse Modules"}
+              >
+                {modulesCollapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" strokeWidth={1.5} /> : <PanelLeftClose className="h-[18px] w-[18px]" strokeWidth={1.5} />}
+              </button>
+            </div>
+          )}
+        </div>
+        {modulesCollapsed && (
+          <div className="flex justify-center mt-3 mb-1">
+            <button
+              onClick={() => setModulesCollapsed(false)}
+              className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:text-teal-500 hover:bg-[#E6F3F0] transition-colors cursor-pointer"
+              aria-label="Expand Modules"
+              title="Expand Modules"
+            >
+              <PanelLeftOpen className="h-[18px] w-[18px]" strokeWidth={1.5} />
+            </button>
           </div>
-        ) : (
+        )}
+
+        {!modulesCollapsed && moduleTreeBody}
+        {modulesCollapsed && (
           <div className="p-1 space-y-1 flex flex-col items-center pt-2 min-h-full">
             <Tooltip content={`All Cases (${allCases.length})`} side="right" delay={0}>
               <button
                 onClick={() => setSelectedModule(null)}
                 className={cn(
                   "flex flex-col items-center justify-center gap-1 h-12 w-10 shrink-0 rounded-xl transition-colors cursor-pointer group",
-                  selectedModule === null ? "bg-primary/10 text-primary shadow-glow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  selectedModule === null ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 )}
               >
                 <FolderOpen className="h-4 w-4 shrink-0" />
-                <span className="text-[9px] font-semibold truncate leading-none text-center uppercase tracking-tighter">{selectedModule === null ? 'All' : 'Cases'}</span>
-                {selectedModule === null && (
-                  <span className="absolute top-0 right-0 w-1 h-4 rounded-r bg-primary" />
-                )}
+                <span className="text-[9px] font-semibold truncate leading-none text-center uppercase tracking-tighter">ALL</span>
+                
               </button>
             </Tooltip>
             <div className="w-5 h-px bg-border/40 mx-0.5 my-0.5" />
@@ -2276,7 +2537,7 @@ export function RepositoryClient({
                   onClick={() => { setSelectedModule('no-module'); setSelectedSubmodule(null); }}
                   className={cn(
                     "flex flex-col items-center justify-center gap-1 h-12 w-10 shrink-0 rounded-xl transition-colors cursor-pointer group relative",
-                    selectedModule === 'no-module' ? "bg-primary/10 text-primary shadow-glow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    selectedModule === 'no-module' ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                 >
                   <Folder className="h-4 w-4 shrink-0" />
@@ -2289,21 +2550,19 @@ export function RepositoryClient({
             )}
             {rootModules.map((m: any) => {
               const isSelected = selectedModule === m.id;
-              const directCount = allCases.filter((c: any) => c.moduleId === m.id).length;
+              const totalCount = moduleTotalCount(m.id);
               return (
-                <Tooltip key={m.id} content={`${m.name} (${directCount})`} side="right" delay={0}>
+                <Tooltip key={m.id} content={`${m.name} (${totalCount})`} side="right" delay={0}>
                   <button
                     onClick={() => setSelectedModule(m.id)}
                     className={cn(
                       "flex flex-col items-center justify-center gap-1 h-12 w-10 shrink-0 rounded-xl transition-colors cursor-pointer group relative",
-                      isSelected ? "bg-primary/10 text-primary shadow-glow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                      isSelected ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
                     )}
                   >
                     <Folder className="h-4 w-4 shrink-0" />
                     <span className="text-[9px] font-semibold truncate leading-none text-center uppercase tracking-tighter">{m.name.slice(0,4).toUpperCase()}</span>
-                    {isSelected && (
-                      <span className="absolute top-0 right-0 w-1 h-4 rounded-r bg-primary" />
-                    )}
+                    
                   </button>
                 </Tooltip>
               );
@@ -2330,6 +2589,7 @@ export function RepositoryClient({
                 <button
                   key={tab.value}
                   onClick={() => {
+                    setSelectedCaseIds(new Set());
                     if (tab.value === '') {
                       setStatusFilters([]);
                     } else {
@@ -2373,6 +2633,16 @@ export function RepositoryClient({
             >
               <PanelLeft className="h-4 w-4" />
             </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="md:hidden shrink-0 h-9 w-9 p-0"
+              onClick={() => setModulesSheetOpen(true)}
+              title="Browse modules"
+              aria-label="Browse modules"
+            >
+              <Folder className="h-4 w-4" />
+            </Button>
 
             <div className="relative flex-1 min-w-[140px] max-w-xs">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
@@ -2399,6 +2669,9 @@ export function RepositoryClient({
               >
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 <span className="hidden min-[1200px]:inline">Filters</span>
+                {isFilterLocked && (
+                  <Lock className="h-3 w-3 -ml-0.5 text-amber-500" aria-label="Filters locked" />
+                )}
                 {activeFiltersCount > 0 && (
                   <span className="ml-1 px-1.5 py-0.2 rounded-full bg-primary text-primary-foreground font-mono font-bold text-[10px]">
                     {activeFiltersCount}
@@ -2410,7 +2683,7 @@ export function RepositoryClient({
               {showFilterPopover && (
                 <>
                   {/* Desktop/tablet popover anchored under the Filters button (>= 480px) */}
-                  <div className="hidden min-[480px]:flex flex-col absolute left-0 top-full mt-2 z-50 w-[325px] max-w-[calc(100vw-32px)] bg-popover/95 backdrop-blur-xl border border-border/80 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in-50 zoom-in-95 duration-150 max-h-[calc(100vh-140px)]">
+                  <div className="hidden min-[480px]:flex flex-col absolute left-0 top-full mt-2 z-50 w-[460px] max-w-[calc(100vw-32px)] bg-popover/95 backdrop-blur-xl border border-border/80 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in-50 zoom-in-95 duration-150 max-h-[calc(100vh-140px)]">
                     {filterPanelHeader}
                     <div className="flex-1 overflow-y-auto">{filterPanelBody}</div>
                     {filterPanelFooter}
@@ -2597,7 +2870,7 @@ export function RepositoryClient({
               All Sub-modules
             </button>
             {modules.filter((m: any) => m.parentId === selectedModule).map((sub: any) => {
-              const count = allCases.filter((c: any) => c.moduleId === sub.id).length;
+              const count = moduleTotalCount(sub.id);
               const isSelected = selectedSubmodule === sub.id;
               return (
                 <button
@@ -2742,11 +3015,70 @@ export function RepositoryClient({
           </div>
         )}
 
-        {selectedCaseIds.size > 0 && (
+        {selectedCaseIds.size > 0 && statusFilters.includes('archived') && (
           <div className="flex items-center gap-2.5 mb-4 p-2.5 px-3.5 rounded-xl bg-card border border-primary/30 shadow-md flex-wrap animate-in fade-in slide-in-from-top-2 duration-150">
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/15 text-primary font-mono">
               {selectedCaseIds.size} selected
             </span>
+            <div className="h-4 w-px bg-border/40 mx-0.5" />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleBulkRestoreCases}
+              className="h-8 text-xs cursor-pointer gap-1.5 border-border/60 hover:bg-muted font-medium"
+            >
+              <RotateCcw className="h-3.5 w-3.5 text-emerald-500" />
+              <span>Restore</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setSelectedCaseIds(new Set())}
+              className="h-8 text-xs cursor-pointer gap-1.5 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span>Clear</span>
+            </Button>
+          </div>
+        )}
+
+        {selectedCaseIds.size > 0 && !statusFilters.includes('archived') && (
+          <div className="flex items-center gap-2.5 mb-4 p-2.5 px-3.5 rounded-xl bg-card border border-primary/30 shadow-md flex-wrap animate-in fade-in slide-in-from-top-2 duration-150">
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/15 text-primary font-mono">
+              {selectedCaseIds.size} selected
+            </span>
+            <Button
+              size="sm"
+              onClick={() => {
+                const ids = Array.from(selectedCaseIds);
+                router.push(`/p/${slug}/runs/new?cases=${encodeURIComponent(ids.join(','))}`);
+              }}
+              className="h-8 text-xs cursor-pointer gap-1.5 gradient-btn text-white font-medium"
+              title="Create a test run with the selected cases"
+            >
+              <Play className="h-3.5 w-3.5" />
+              <span>Create run</span>
+            </Button>
+            {selectedModule &&
+              selectedModuleCaseIds.length > 0 &&
+              selectedModuleCaseIds.some((id) => !selectedCaseIds.has(id)) && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setSelectedCaseIds((prev) => {
+                      const next = new Set(prev);
+                      selectedModuleCaseIds.forEach((id) => next.add(id));
+                      return next;
+                    });
+                  }}
+                  className="h-8 text-xs cursor-pointer gap-1.5 text-muted-foreground hover:text-foreground"
+                  title="Select every case in this module, including sub-modules"
+                >
+                  <ListChecks className="h-3.5 w-3.5" />
+                  <span>Select all {selectedModuleCaseIds.length} in module</span>
+                </Button>
+              )}
             <div className="h-4 w-px bg-border/40 mx-0.5" />
 
             {/* Move to Module Custom Dropdown */}
@@ -2971,7 +3303,7 @@ export function RepositoryClient({
                       <Folder className="h-4 w-4 text-primary shrink-0" />
                       <h3 className="font-semibold text-sm text-foreground">{group.name}</h3>
                       <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-muted/60 text-muted-foreground font-semibold">
-                        {directCount}
+                        {totalCount}
                       </span>
                     </div>
 
@@ -3113,7 +3445,7 @@ export function RepositoryClient({
                         onSelectionChange={setSelectedCaseIds}
                         pagination={false}
                         hideHeader={true}
-                        checkboxCellClassName="w-[46px] pl-3 pr-1"
+                        checkboxCellClassName="w-[46px] pl-3 pr-1 max-sm:sticky max-sm:left-0 max-sm:z-[2] max-sm:bg-card"
                         rowDraggable={canEdit}
                         onRowDragStart={handleRowDragStart}
                         onRowDrop={handleRowDrop}
@@ -3201,7 +3533,7 @@ export function RepositoryClient({
                                 <Folder className="h-3.5 w-3.5 text-primary/85 shrink-0" />
                                 <h4 className="font-medium text-xs text-foreground/90">{sub.name}</h4>
                                 <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-muted/60 text-muted-foreground font-medium shrink-0">
-                                  {sub.cases.length}
+                                  {sub.totalCasesCount ?? sub.cases.length}
                                 </span>
                               </div>
 
@@ -3319,25 +3651,26 @@ export function RepositoryClient({
             })}
           </div>
         ) : (
-          <DataTable
-            data={statusFilters.includes('archived') ? archivedCases : filteredCases}
-            columns={statusFilters.includes('archived') ? archivedColumns : columns}
-            onRowClick={(row) => {
-              if (!statusFilters.includes('archived')) {
-                handleOpenCase(row.displayId);
-              }
-            }}
-            getId={(row) => row.id}
-            selectable={canEdit && !statusFilters.includes('archived')}
-            selectedIds={selectedCaseIds}
-            onSelectionChange={setSelectedCaseIds}
-            pagination={false}
-            checkboxCellClassName="w-[46px] pl-3 pr-1"
-            tableClassName="table-fixed w-full"
-            rowDraggable={canEdit && !statusFilters.includes('archived')}
-            onRowDragStart={handleRowDragStart}
-            onRowDrop={handleRowDrop}
-            emptyComponent={
+          <div className="rounded-xl border border-border/50 overflow-hidden bg-card/40 shadow-xs transition-all">
+            <DataTable
+              data={statusFilters.includes('archived') ? archivedCases : filteredCases}
+              columns={statusFilters.includes('archived') ? archivedColumns : columns}
+              onRowClick={(row) => {
+                if (!statusFilters.includes('archived')) {
+                  handleOpenCase(row.displayId);
+                }
+              }}
+              getId={(row) => row.id}
+              selectable={canEdit}
+              selectedIds={selectedCaseIds}
+              onSelectionChange={setSelectedCaseIds}
+              pagination={false}
+              checkboxCellClassName="w-[46px] pl-3 pr-1 max-sm:sticky max-sm:left-0 max-sm:z-[2] max-sm:bg-card"
+              tableClassName="table-fixed w-full"
+              rowDraggable={canEdit && !statusFilters.includes('archived')}
+              onRowDragStart={handleRowDragStart}
+              onRowDrop={handleRowDrop}
+              emptyComponent={
               <EmptyState
                 icon={FolderOpen}
                 heading={
@@ -3367,6 +3700,7 @@ export function RepositoryClient({
               />
             }
           />
+          </div>
         )}
       </main>
 
@@ -3772,7 +4106,7 @@ export function RepositoryClient({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setShowCreateModuleModal(false); setModuleForm(''); setModuleParentId(null); }}>Cancel</Button>
-            <Button onClick={handleCreateModule} disabled={!moduleForm.trim()}>Create</Button>
+            <Button onClick={handleCreateModule} disabled={!moduleForm.trim()} className="gradient-btn text-white">Create</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -3795,6 +4129,7 @@ export function RepositoryClient({
       >
         <DialogContent
           hideClose
+          sheetOnMobile={false}
           className="max-w-7xl w-[96vw] h-[92vh] max-h-[92vh] p-0 overflow-hidden flex flex-col border border-border/80 bg-background shadow-2xl rounded-2xl"
         >
           {persistentDrawerCaseId && (
@@ -3817,12 +4152,32 @@ export function RepositoryClient({
         </DialogContent>
       </Dialog>
 
+      {/* Mobile module drawer: the tree lives in the desktop sidebar. */}
+      <Sheet open={modulesSheetOpen} onOpenChange={setModulesSheetOpen}>
+        <SheetContent side="left" className="w-[86vw] max-w-[320px] p-0 flex flex-col">
+          <SheetHeader className="px-3 py-3 border-b flex-row items-center justify-between space-y-0">
+            <SheetTitle className="text-sm font-semibold">Modules</SheetTitle>
+            {canEdit && (
+              <button
+                onClick={() => {
+                  setModulesSheetOpen(false);
+                  setShowCreateModuleModal(true);
+                }}
+                className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" /> Module
+              </button>
+            )}
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto module-sidebar-scroll">{moduleTreeBody}</div>
+        </SheetContent>
+      </Sheet>
+
       {/* 2. Case Detail Slide-Over Sheet / Drawer */}
       <Sheet
         open={Boolean(activeDrawerCaseId && detailViewType === 'sheet')}
         onOpenChange={(open) => { if (!open) handleCloseCaseDrawer(); }}
-      >
-        <SheetContent
+      >        <SheetContent
           side="right"
           onClose={() => handleCloseCaseDrawer()}
           hideClose={true}
@@ -4258,15 +4613,15 @@ function ModuleItem({
           >
             <Folder className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
             <TruncatedText text={module.name} className="font-medium text-xs text-foreground/90 flex-1 min-w-0" />
-            <span className={cn("text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-muted/60 text-muted-foreground font-medium shrink-0 ml-auto", !readOnly && "group-hover:hidden")}>
+            <span className={cn("text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-muted/60 text-muted-foreground font-medium shrink-0 ml-auto", !readOnly && "group-hover:invisible")}>
               {getCaseCount(module.id)}
             </span>
           </button>
         )}
 
-        {/* Right hover actions: +, Edit, Delete (NO up/down arrow buttons!) */}
+        {/* Right hover actions overlay the count badge instead of reflowing the row */}
         {!editing && !readOnly && (
-          <div className="hidden group-hover:flex items-center gap-0.5 shrink-0 ml-auto pl-1">
+          <div className="absolute right-1 top-1/2 z-10 hidden -translate-y-1/2 items-center gap-0.5 rounded-lg bg-surface/95 pl-1 pr-0.5 py-0.5 shadow-sm backdrop-blur-sm group-hover:flex">
             {!module.parentId && (
               <button
                 type="button"

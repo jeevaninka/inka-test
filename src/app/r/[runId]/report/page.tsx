@@ -25,8 +25,8 @@ export async function generateMetadata({ params, searchParams }: Props) {
   if (!run) return { title: 'Run report — InkaTest' };
   const title = run.name || 'Test run report';
   const project = run.project?.name || 'InkaTest';
-  const when = run.completedAt
-    ? `report as of ${new Date(run.completedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`
+  const when = run.completed_at
+    ? `report as of ${new Date(run.completed_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`
     : '';
   const desc = when ? `${project} · ${title} · ${when}` : `${project} · ${title}`;
   return {
@@ -53,9 +53,9 @@ async function fetchRunReport(runId: string, userId: number | null) {
       },
     });
   } catch {
-    return { run: null, results: [], cases: {}, defects: [], teamRows: [], hasManualCases: false, isInternal: false, workspaceName: '', projectName: '', runId, error: 'Run not found' };
+    return null;
   }
-  if (!run) return { run: null, results: [], cases: {}, defects: [], teamRows: [], hasManualCases: false, isInternal: false, workspaceName: '', projectName: '', runId, error: 'Run not found' };
+  if (!run) return null;
 
   const isInternal = userId != null;
   const workspaceName = run.project?.workspace?.name || 'Workspace';
@@ -68,7 +68,7 @@ async function fetchRunReport(runId: string, userId: number | null) {
       await requireProjectMemberByRunId(runId, userId, 'VIEWER');
     } catch (err) {
       logger.error('Report permission denied', { module: 'ReportPage', action: 'fetchRunReport', runId, userId, error: err });
-      return { run: null, results: [], cases: {}, defects: [], teamRows: [], hasManualCases: false, isInternal: false, workspaceName, projectName, runId, error: 'Access denied' };
+      return null;
     }
   }
 
@@ -157,7 +157,7 @@ async function fetchRunReport(runId: string, userId: number | null) {
 
   // Defeats
   const defectRows = await prisma.defect.findMany({
-    where: { run_result: { run_id: runId, deleted_at: null }, deleted_at: null },
+    where: { run_result: { run_id: runId }, deleted_at: null },
     include: {
       run_result: { select: { test_case: { select: { display_id: true } }, test_case_id: true } },
     },
@@ -207,7 +207,7 @@ async function fetchRunReport(runId: string, userId: number | null) {
   return {
     run: mappedRun,
     results,
-    cases: casesMap,
+    cases: Object.fromEntries(casesMap),
     defects,
     teamRows,
     hasManualCases,
@@ -234,10 +234,11 @@ export default async function RunReportPage({ params, searchParams }: Props) {
   }
 
   const includePassed = sp.includePassed === '1' || sp.includePassed === 'true';
+  const reportData = data;
 
   return (
     <ReportShell
-      data={data}
+      data={reportData}
       error={error}
       isPrint={sp.print === 'true'}
       includePassedDefault={includePassed}

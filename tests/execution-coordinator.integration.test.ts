@@ -102,6 +102,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await prisma.externalExecutionMonitor.deleteMany({ where: { run_id: { in: runIds } } }).catch(() => {});
+  await prisma.activityLog.deleteMany({ where: { entity_type: 'test_run', entity_id: { in: runIds } } }).catch(() => {});
   await prisma.runResult.deleteMany({ where: { run_id: { in: runIds } } }).catch(() => {});
   await prisma.testRun.deleteMany({ where: { id: { in: runIds } } }).catch(() => {});
 });
@@ -120,6 +121,30 @@ describe('execution coordinator (live DB)', () => {
     const rows = await prisma.runResult.findMany({ where: { run_id: run.id } });
     expect(rows.every((r) => r.execution_state === 'QUEUED')).toBe(true);
     expect(rows.every((r) => r.queued_at !== null)).toBe(true);
+  });
+
+  it('auto-assigns unassigned cases to the starter and logs the start', async () => {
+    const run = await seedRun({ label: 'assign', statuses: ['PENDING', 'PENDING', 'PENDING'] });
+    const otherAssignee = actorId === 1 ? 2 : 1;
+    await prisma.runResult.updateMany({
+      where: { run_id: run.id, order_index: 0 },
+      data: { assigned_to: otherAssignee },
+    });
+
+    await startRunCases({ runId: run.id, actorId, startImmediately: false });
+
+    const rows = await prisma.runResult.findMany({
+      where: { run_id: run.id },
+      orderBy: { order_index: 'asc' },
+    });
+    expect(rows[0].assigned_to).toBe(otherAssignee); // existing assignment untouched
+    expect(rows[1].assigned_to).toBe(actorId);
+    expect(rows[2].assigned_to).toBe(actorId);
+
+    const log = await prisma.activityLog.findFirst({
+      where: { entity_type: 'test_run', entity_id: run.id, user_id: actorId },
+    });
+    expect(log?.action).toBe('Started test run');
   });
 
   it('rerun-all creates new attempts and bumps the generation instead of resetting history', async () => {

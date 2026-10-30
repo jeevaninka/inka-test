@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { Tooltip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { navigateTo } from '@/lib/navigation';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import {
   Rocket,
@@ -1153,7 +1154,7 @@ export default function ReleasesPage() {
                                                             <button
                                                               key={c.id}
                                                               type="button"
-                                                              onClick={() => router.push(`/p/${slug}/repository?case=${c.id}`)}
+                                                              onClick={(e) => navigateTo(e, `/p/${slug}/repository?case=${c.id}`, router.push)}
                                                               className="w-full text-left p-1.5 rounded-lg hover:bg-white/10 flex items-center justify-between gap-2 group transition-colors cursor-pointer"
                                                             >
                                                               <div className="min-w-0 flex-1 flex items-start gap-1.5 text-[11px]">
@@ -1221,7 +1222,7 @@ export default function ReleasesPage() {
                                                           <button
                                                             key={c.id}
                                                             type="button"
-                                                            onClick={() => router.push(`/p/${slug}/repository?case=${c.id}`)}
+                                                            onClick={(e) => navigateTo(e, `/p/${slug}/repository?case=${c.id}`, router.push)}
                                                             className="w-full text-left p-1.5 rounded-lg hover:bg-white/10 flex items-center justify-between gap-2 group transition-colors cursor-pointer"
                                                           >
                                                             <div className="min-w-0 flex-1 flex items-start gap-1.5 text-[11px]">
@@ -1448,7 +1449,7 @@ export default function ReleasesPage() {
                                         </div>
                                         <div className="flex items-center gap-2">
                                           <button
-                                            onClick={() => router.push(`/p/${slug}/runs/${r.id}`)}
+                                            onClick={(e) => navigateTo(e, `/p/${slug}/runs/${r.id}`, router.push)}
                                             className="px-2.5 py-1 rounded-lg bg-muted/40 hover:bg-muted text-primary border border-border/60 text-[11px] font-medium"
                                           >
                                             Open ↗

@@ -9,6 +9,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { ProgressCircle } from '@/components/common/ProgressCircle';
 import { UserAvatar } from '@/components/common/UserAvatar';
 import { cn, formatDuration } from '@/lib/utils';
+import { subscribeRunEvents } from '@/lib/runs/run-events-bus';
 import { toast } from 'sonner';
 import { getRunDefectsAction, type ProjectDefectItem } from '@/app/actions/defects';
 import type { TeamProgressRow } from '@/lib/runs/team-progress';
@@ -279,42 +280,22 @@ export function RunOverviewDrawer({
     };
   }, [open, runId]);
 
-  // Live updates: the run events stream carries snapshot invalidations while
-  // the drawer is open. A 15s poll covers reconnect gaps.
+  // Live updates through the shared per-run events bus (one connection per run
+  // per tab, shared with the run page when both are mounted).
+  const onRefreshRef = useRef(onRefresh);
+  onRefreshRef.current = onRefresh;
+
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    let lastVersion = '';
-    let lastRunAt = 0;
-
-    const refresh = () => {
-      if (cancelled) return;
-      const now = Date.now();
-      if (now - lastRunAt < 400) return;
-      lastRunAt = now;
-      void onRefresh();
-    };
-
-    const source = new EventSource(`/api/v1/runs/${encodeURIComponent(runId)}/events`);
-    source.addEventListener('snapshot', (event) => {
-      try {
-        const payload = JSON.parse((event as MessageEvent).data);
-        if (payload?.version && payload.version === lastVersion) return;
-        lastVersion = String(payload?.version || '');
-      } catch {
-        // malformed event: still refresh
-      }
-      refresh();
-    });
-    source.addEventListener('error', () => {});
-    const poll = window.setInterval(refresh, 15_000);
-
-    return () => {
-      cancelled = true;
-      source.close();
-      window.clearInterval(poll);
-    };
-  }, [open, runId, onRefresh]);
+    if (!open || !runId) return;
+    const unsubscribe = subscribeRunEvents(
+      runId,
+      () => {
+        void onRefreshRef.current();
+      },
+      { poll: true }
+    );
+    return unsubscribe;
+  }, [open, runId]);
 
   useEffect(() => {
     if (!open || focusSection !== 'team') return;

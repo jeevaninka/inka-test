@@ -92,7 +92,7 @@ export function ProjectsClient({ projects }: ProjectsClientProps) {
             <p className="text-muted-foreground mb-6">
               Create your first project to start managing test cases.
             </p>
-            <Button onClick={() => setShowCreateModal(true)}>
+            <Button onClick={() => setShowCreateModal(true)} className="gradient-btn text-white">
               <Plus className="h-4 w-4 mr-2" />
               Create Project
             </Button>

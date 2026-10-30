@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { signIn } from 'next-auth/react';
 import {
   AlertCircle,
@@ -11,8 +12,6 @@ import {
   EyeOff,
   FolderGit2,
   Loader2,
-  Sparkles,
-  Zap,
 } from 'lucide-react';
 import styles from './login.module.css';
 
@@ -131,8 +130,8 @@ export default function LoginView({ callbackUrl = '/pending', initialEmail = '' 
         {/* Brand Header Bar: Logo + Name + "AI-first test management" shifted to the right */}
         <div className={`${styles.brand} ${styles.reveal}`} style={{ ['--d' as string]: '0.05s' }}>
           <div className={styles.brandMain}>
-            <span className={styles.logo}><Zap size={20} strokeWidth={2.2} /></span>
-            <span>Inka<span className={styles.brandAccent}>Test</span></span>
+            <span className={styles.logo}><Image src="/logo.svg" alt="InkaTest" width={38} height={38} /></span>
+            <span className="text-lg font-bold gradient-text">InkaTest</span>
           </div>
 
           <span className={styles.eyebrow} aria-label="Product tag">
@@ -203,7 +202,7 @@ export default function LoginView({ callbackUrl = '/pending', initialEmail = '' 
 
             {/* Vignette 3: AI Copilot */}
             <div className={`${styles.float} ${styles.fAi}`}>
-              <Sparkles size={16} className={styles.spark} />
+              <span className={styles.spark}><Image src="/logo.svg" alt="" width={16} height={16} /></span>
               <span>12 cases drafted by AI · <b style={{ color: 'var(--brand-3)' }}>Draft</b></span>
             </div>
           </div>
@@ -221,7 +220,7 @@ export default function LoginView({ callbackUrl = '/pending', initialEmail = '' 
       <section className={styles.panel}>
         <div className={`${styles.card} ${styles.reveal}`} style={{ ['--d' as string]: '0.2s' }}>
           <header className={styles.cardHead}>
-            <div className={styles.cardLogo}><Zap size={26} strokeWidth={2.2} /></div>
+            <div className={styles.cardLogo}><Image src="/logo.svg" alt="InkaTest" width={54} height={54} /></div>
             <h2 className={styles.title}>
               Welcome to <span className={styles.gradientText}>InkaTest</span>
             </h2>

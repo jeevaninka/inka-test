@@ -251,7 +251,7 @@ export function CommentBox({
         <Button
           onClick={handleSubmit}
           disabled={(!body.trim() && attachmentIds.length === 0) || isSubmitting}
-          className="ml-auto btn-glow rounded-xl"
+          className="ml-auto gradient-btn text-white rounded-xl"
         >
           {isSubmitting ? (
             <>

@@ -2341,6 +2341,13 @@ export const StepEditor = forwardRef<StepEditorHandle, StepEditorProps>(function
                                 <Link2 className="h-3 w-3" />
                                 <span>Shared Step</span>
                               </span>
+                              <span
+                                className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shrink-0 select-none"
+                                title="Changing this block in the library affects every case that uses it"
+                              >
+                                <Layers className="h-2.5 w-2.5" />
+                                Used in {group.casesCount} case{group.casesCount === 1 ? '' : 's'}
+                              </span>
                               {group.isOutdated && (
                                 <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400 font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 shrink-0">
                                   <span className="h-1.5 w-1.5 rounded-full bg-amber-500 inline-block" />
@@ -2572,7 +2579,7 @@ export const StepEditor = forwardRef<StepEditorHandle, StepEditorProps>(function
 
       {/* Create Reusable Step Group Modal */}
       <Dialog open={showReusableGroupModal} onOpenChange={setShowReusableGroupModal}>
-        <DialogContent className="max-w-md bg-card text-card-foreground border border-border/80 shadow-2xl">
+        <DialogContent className="w-[calc(100vw-32px)] max-w-[760px] bg-card text-card-foreground border border-border/80 shadow-2xl">
           <DialogHeader>
             <div className="flex items-center gap-2 text-foreground">
               <Layers className="h-4 w-4 text-muted-foreground" />
@@ -2597,25 +2604,60 @@ export const StepEditor = forwardRef<StepEditorHandle, StepEditorProps>(function
               />
             </div>
 
-            {selectedStepIds.size > 0 && (
-              <div className="space-y-1.5">
-                <span className="text-[11px] font-medium text-muted-foreground block">
-                  Included Steps ({selectedStepIds.size})
-                </span>
-                <div className="rounded-xl border border-border/60 bg-muted/20 divide-y divide-border/30 max-h-40 overflow-y-auto text-xs">
-                  {items
-                    .filter((s) => selectedStepIds.has(s.id))
-                    .map((s, idx) => (
-                      <div key={s.id} className="px-3 py-2 flex items-center gap-2 min-w-0">
-                        <span className="font-mono text-[11px] text-muted-foreground font-semibold shrink-0">
-                          {idx + 1}.
-                        </span>
-                        <span className="truncate text-foreground/90">{s.step || 'Empty step'}</span>
-                      </div>
-                    ))}
+            {(() => {
+              const includedSteps = items.filter((s) => selectedStepIds.has(s.id));
+              if (includedSteps.length === 0) return null;
+              return (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-muted-foreground">
+                      Included Steps ({includedSteps.length})
+                    </span>
+                    <span className="text-[10.5px] text-muted-foreground/70">
+                      Steps are saved in this order
+                    </span>
+                  </div>
+                  <div className="overflow-hidden rounded-xl border border-border/60">
+                    <div className="max-h-[320px] overflow-y-auto">
+                      <table className="w-full table-fixed border-collapse text-left">
+                        <thead className="sticky top-0 z-10 bg-muted/60 backdrop-blur-sm">
+                          <tr className="text-[10.5px] uppercase tracking-wide text-muted-foreground">
+                            <th scope="col" className="w-9 px-2 py-2 font-semibold">#</th>
+                            <th scope="col" className="px-3 py-2 font-semibold">Action</th>
+                            <th scope="col" className="w-[26%] px-3 py-2 font-semibold">Data</th>
+                            <th scope="col" className="w-[28%] px-3 py-2 font-semibold">Expected</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border/30">
+                          {includedSteps.map((s, idx) => (
+                            <tr key={s.id} className="align-top text-xs hover:bg-muted/20">
+                              <td className="px-2 py-2 font-mono text-[11px] font-semibold text-muted-foreground">
+                                {idx + 1}
+                              </td>
+                              <td className="px-3 py-2 text-foreground/90">
+                                <span className="line-clamp-2 break-words" title={s.step || undefined}>
+                                  {s.step || <span className="italic text-muted-foreground/70">Empty step</span>}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-muted-foreground">
+                                <span className="line-clamp-2 break-words" title={s.data || undefined}>
+                                  {s.data || <span className="text-muted-foreground/40">—</span>}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-muted-foreground">
+                                <span className="line-clamp-2 break-words" title={s.expected_result || undefined}>
+                                  {s.expected_result || <span className="text-muted-foreground/40">—</span>}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" size="sm" onClick={() => setShowReusableGroupModal(false)}>

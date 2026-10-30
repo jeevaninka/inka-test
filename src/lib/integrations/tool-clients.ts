@@ -2953,6 +2953,8 @@ export interface DatadogTriggeredExecution {
   resultId: string;
   testType?: string;
   testName?: string;
+  /** Provider batch state; `skipped`/`missed`/`interrupted` never produce a result id. */
+  status?: string;
 }
 
 export interface DatadogTriggerResult {
@@ -3192,13 +3194,58 @@ export async function fetchDatadogBatchSnapshot(
       resultId: String(r?.result_id || ''),
       testType: r?.test_type || r?.type || undefined,
       testName: r?.test_name || undefined,
+      status: r?.status ? String(r.status) : undefined,
     })),
     raw: data,
   };
 }
 
-export interface DatadogRunOptions {  publicIds: string[];
-  environmentName?: string;
+export interface DatadogTestConfigSummary {
+  name?: string;
+  /** The Datadog test is muted/paused, so CI triggers skip it. */
+  paused: boolean;
+  /** Test-level CI execution rule (e.g. "skipped" means "never run from CI"). */
+  ciExecutionRule?: string;
+}
+
+/**
+ * Lightweight metadata read used to explain why Datadog did not execute a test.
+ * Only called once, after the provider already reported the test as skipped.
+ */
+export async function fetchDatadogTestConfigSummary(
+  config: DatadogIntegrationConfig,
+  publicId: string
+): Promise<DatadogTestConfigSummary | null> {
+  if (!publicId) return null;
+  const site = normalizeDatadogSite(config.site);
+  const apiKey = decrypt((config.apiKey || '').trim());
+  const appKey = decrypt((config.appKey || '').trim());
+  if (!apiKey || !appKey) return null;
+
+  const res = await fetch(
+    `https://api.${site}/api/v1/synthetics/tests/${encodeURIComponent(publicId)}`,
+    {
+      headers: {
+        'DD-API-KEY': apiKey,
+        'DD-APPLICATION-KEY': appKey,
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(12000),
+    }
+  ).catch(() => null);
+  if (!res || !res.ok) return null;
+
+  const json = await res.json().catch(() => null);
+  if (!json) return null;
+  const ciRule = json?.options?.ci?.executionRule ?? json?.options?.ci?.execution_rule;
+  return {
+    name: json.name ? String(json.name) : undefined,
+    paused: String(json.status || '').toLowerCase() === 'paused',
+    ciExecutionRule: ciRule ? String(ciRule) : undefined,
+  };
+}
+
+export interface DatadogRunOptions {  publicIds: string[];  environmentName?: string;
   startUrlOverride?: string;
   inkaVariables?: Record<string, string>;
   datasetParams?: Record<string, string>;

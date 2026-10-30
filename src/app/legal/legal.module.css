@@ -1,15 +1,19 @@
 /* Shared chrome for public legal pages. */
 
 .root {
-  --bg: #060b11;
-  --surface: rgba(16, 24, 33, 0.55);
+  /* Cyber Teal canvas — matches the in-product dark theme. */
+  --bg: #061014;
+  --surface: rgba(16, 30, 34, 0.55);
   --line: rgba(255, 255, 255, 0.08);
   --text: #eaf2f5;
   --muted: #8a9ba6;
   --brand: #5fd0b8;
 
   min-height: 100dvh;
-  background: var(--bg);
+  background:
+    radial-gradient(120% 90% at 12% -10%, rgba(95, 208, 184, 0.14) 0%, transparent 55%),
+    radial-gradient(110% 80% at 92% 110%, rgba(74, 168, 255, 0.12) 0%, transparent 55%),
+    linear-gradient(180deg, #071418 0%, var(--bg) 45%, #050f13 100%);
   color: var(--text);
   font-family: var(--font-sans, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif);
   position: relative;
@@ -29,7 +33,7 @@
   height: 46vmax;
   border-radius: 50%;
   filter: blur(110px);
-  opacity: 0.16;
+  opacity: 0.28;
 }
 .blob1 {
   background: radial-gradient(circle, var(--brand) 0%, transparent 65%);
@@ -51,9 +55,21 @@
   justify-content: space-between;
   gap: 16px;
   padding: 16px 24px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(6, 11, 17, 0.82);
+  border-bottom: 1px solid transparent;
+  background:
+    linear-gradient(180deg, rgba(95, 208, 184, 0.11) 0%, rgba(12, 32, 38, 0.86) 58%, rgba(6, 16, 20, 0.9) 100%);
   backdrop-filter: blur(14px);
+}
+/* Soft teal hairline instead of a hard border, so the bar melts into the canvas. */
+.header::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(95, 208, 184, 0.45) 22%, rgba(74, 168, 255, 0.4) 78%, transparent);
+  pointer-events: none;
 }
 
 .brand {
@@ -69,11 +85,33 @@
   place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #6fe0c7, #4fc3e8);
-  color: #04120f;
+  border-radius: 9px;
+  /* The mark ships its own gradient tile — only add a soft glow here. */
+  background: transparent;
+  box-shadow: 0 0 18px rgba(95, 208, 184, 0.28);
+  overflow: hidden;
+}
+.logo img {
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+  display: block;
 }
 .brandAccent { color: var(--brand); }
+
+/* Same signature gradient as the in-product wordmark. */
+.brandGradient {
+  background-image: linear-gradient(
+    135deg,
+    hsl(172 66% 48%) 0%,
+    hsl(188 80% 45%) 50%,
+    hsl(210 85% 55%) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
 
 .nav {
   display: flex;

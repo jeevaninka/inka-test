@@ -1,12 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { ChevronDown, ChevronRight, Sparkles, CheckCircle2, Link2, Upload as UploadIcon, X, Tag, FileText, Folder, Loader2, Terminal, Copy, Plus, AlertCircle, Search, Eye, EyeOff, Image as ImageIcon } from 'lucide-react';
+import { ChevronDown, ChevronRight, Sparkles, CheckCircle2, Link2, Upload as UploadIcon, X, Tag, FileText, Folder, Layers, Loader2, Terminal, Copy, Plus, AlertCircle, Search, Eye, EyeOff, Image as ImageIcon } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { generateCasesAction, acceptMultipleAiCasesAction } from '@/app/actions/ai';
 import { fetchConfluencePageAction, fetchNotionPageAction } from '@/app/actions/integrations';
@@ -240,6 +240,51 @@ function inferScenarioTypeFromTitle(title: string): 'positive' | 'negative' | 'e
   return 'positive';
 }
 
+/**
+ * Destination suite for Postman/Datadog imports. Imported cases are linked to
+ * the chosen suite in import order; "No suite" keeps them unlinked.
+ */
+function SuiteSelector({
+  suites,
+  value,
+  onChange,
+  disabled,
+}: {
+  suites: Array<{ id: string; name?: string }>;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const options = suites.filter((suite) => suite?.id);
+  return (
+    <div className="space-y-1.5">
+      <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+        <Layers className="h-3.5 w-3.5 text-primary" />
+        <span>Suite</span>
+        <span className="ml-auto text-[10px] font-normal text-muted-foreground">Optional</span>
+      </label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled || options.length === 0}
+        className="w-full h-9 rounded-lg border border-input bg-background px-3 text-xs font-medium text-foreground disabled:opacity-60"
+      >
+        <option value="">
+          {options.length === 0 ? 'No suites in this project' : 'No suite'}
+        </option>
+        {options.map((suite) => (
+          <option key={suite.id} value={suite.id}>
+            {suite.name || 'Untitled suite'}
+          </option>
+        ))}
+      </select>
+      <p className="text-[10.5px] text-muted-foreground">
+        Imported cases are added to this suite in import order.
+      </p>
+    </div>
+  );
+}
+
 interface GenerateTestCasesDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -255,12 +300,45 @@ export function GenerateTestCasesDialog({
   initialSourceMode = 'prompt',
   onSuccess,
 }: GenerateTestCasesDialogProps) {
-  const { modules, setModules, cases: existingCases, setCases, project } = useProjectData();
+  const { modules, setModules, cases: existingCases, setCases, project, suites } = useProjectData();
+
+  /**
+   * Starter prompts built from the project's own feature areas. They give a
+   * blank description something concrete to click instead of an empty box.
+   */
+  const promptSuggestions = useMemo(() => {
+    const byCount = new Map<string, number>();
+    for (const c of existingCases || []) {
+      const key = (c as any).moduleId;
+      if (!key) continue;
+      byCount.set(key, (byCount.get(key) || 0) + 1);
+    }
+    const named = (modules || [])
+      .filter((m: any) => m?.name)
+      .sort(
+        (a: any, b: any) =>
+          (byCount.get(b.id) || 0) - (byCount.get(a.id) || 0) ||
+          String(a.name).localeCompare(String(b.name))
+      )
+      .slice(0, 5)
+      .map((m: any) => ({
+        label: m.name,
+        template: `Users can complete the main ${m.name} flow end to end. Cover the happy path, validation errors, permission boundaries and empty states.`,
+      }));
+    if (named.length > 0) return named;
+    return [
+      { label: 'Authentication', template: 'Users can sign in, sign out and recover a forgotten password.' },
+      { label: 'Search', template: 'Users can search, filter and clear results without losing state.' },
+      { label: 'Billing', template: 'Users can change plan, apply a coupon and see the invoice update.' },
+    ];
+  }, [modules, existingCases]);
   const [sourceMode, setSourceMode] = useState<'prompt' | 'postman' | 'datadog' | 'confluence' | 'notion'>(initialSourceMode);
   const [description, setDescription] = useState('');
   const [countMode, setCountMode] = useState<'auto' | 'custom'>('auto');
   const [count, setCount] = useState<number>(5);
   const [moduleId, setModuleId] = useState<string>('auto');
+  // Destination suite for Postman/Datadog imports (optional, single-select).
+  const [suiteId, setSuiteId] = useState<string>('');
   const [creatingModule, setCreatingModule] = useState(false);
   const [promptMode, setPromptMode] = useState<'auto' | 'custom'>('auto');
   const [customPrompt, setCustomPrompt] = useState('');
@@ -703,6 +781,7 @@ export function GenerateTestCasesDialog({
     setCountMode('auto');
     setCount(5);
     setModuleId('auto');
+    setSuiteId('');
     setPromptMode('auto');
     setCustomPrompt('');
     setShowAdvancedPrompt(false);
@@ -1375,6 +1454,7 @@ export function GenerateTestCasesDialog({
         const result = await importExternalTestCasesAction({
           projectId,
           cases: normalizedCases,
+          suiteId: suiteId || undefined,
         });
         savedCases = result.created;
         skippedCount = result.skipped.length;
@@ -1674,6 +1754,13 @@ export function GenerateTestCasesDialog({
                         : 'Every selected folder becomes one flow test case.'}
                   </p>
                 </div>
+
+                <SuiteSelector
+                  suites={suites as Array<{ id: string; name?: string }>}
+                  value={suiteId}
+                  onChange={setSuiteId}
+                  disabled={isSaving}
+                />
 
                 {/* Request tree */}
                 {(selectedCollectionUid.trim() || loadingRequests || requestsError) && (
@@ -2139,6 +2226,12 @@ export function GenerateTestCasesDialog({
                     </div>
                   )}
                 </div>
+                <SuiteSelector
+                  suites={suites as Array<{ id: string; name?: string }>}
+                  value={suiteId}
+                  onChange={setSuiteId}
+                  disabled={isSaving}
+                />
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-foreground flex items-center justify-between gap-2">
                     <span>Synthetic Tests *</span>
@@ -2474,19 +2567,50 @@ export function GenerateTestCasesDialog({
                       setIsDragging(false);
                       const dropped = Array.from(e.dataTransfer?.files || []);
                       if (dropped.length > 0) {
-                        setFiles((prev) => [
-                          ...prev,
-                          ...dropped.map((f) => ({
-                            name: f.name,
-                            mimeType: f.type || 'text/plain',
-                            data: '',
-                          })),
-                        ]);
+                        const newFiles: { name: string; mimeType: string; data: string }[] = [];
+                        let loaded = 0;
+                        dropped.forEach((f) => {
+                          const reader = new FileReader();
+                          reader.onload = (event) => {
+                            const result = event.target?.result as string;
+                            const base64Data = result.split(',')[1];
+                            newFiles.push({
+                              name: f.name,
+                              mimeType: f.type || 'text/plain',
+                              data: base64Data,
+                            });
+                            loaded += 1;
+                            if (loaded === dropped.length) {
+                              setFiles((prev) => [...prev, ...newFiles]);
+                            }
+                          };
+                          reader.readAsDataURL(f);
+                        });
                       }
                     }}
                     disabled={isGenerating || isSaving}
                     rows={4}
                   />
+                  {promptSuggestions.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] text-muted-foreground">Suggestions:</span>
+                      {promptSuggestions.map((s) => (
+                        <button
+                          key={s.label}
+                          type="button"
+                          disabled={isGenerating || isSaving}
+                          onClick={() =>
+                            setDescription((prev) => (prev.trim() ? `${prev.trim()}\n${s.template}` : s.template))
+                          }
+                          className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary cursor-pointer disabled:opacity-50"
+                          title={s.template}
+                        >
+                          <Sparkles className="h-2.5 w-2.5" />
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 
                 <div className="space-y-2">

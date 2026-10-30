@@ -28,6 +28,7 @@ import {
   updateRunResultAction,
   assignRunResultAction, unassignRunResultAction,
   resetSingleResultAction,
+  startManualResultAction,
   deleteRunResultAction
 } from '@/app/actions/runs';
 import dynamic from 'next/dynamic';
@@ -1969,6 +1970,27 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
 
   const linkedProvider = currentCase ? getCaseAutomationSource(currentCase) : 'manual';
   const hasLinkedRunner = linkedProvider === 'postman' || linkedProvider === 'datadog';
+
+  // Opening a manual, undecided case starts the session: the timer runs and the
+  // case is marked as started once. Automated cases stay provider-owned.
+  const autoStartedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const result = currentResult;
+    if (!result?.id || !currentCase) return;
+    if (linkedProvider !== 'manual' || isDecided) return;
+    if (String(run?.status || '').toLowerCase() === 'aborted') return;
+    if (String(result.status || '').toLowerCase() !== 'pending') return;
+    const state = String(result.caseState || result.executionState || '').toUpperCase();
+    if (['RUNNING', 'QUEUED', 'WAITING'].includes(state)) return;
+    if (autoStartedRef.current.has(result.id)) return;
+
+    autoStartedRef.current.add(result.id);
+    setSessionStarted(true);
+
+    // Persist the start marker (drives the "In Progress" pill in the deck).
+    void startManualResultAction(result.id).catch(() => {});
+  }, [currentCase, currentResult?.id, currentResult?.status, isDecided, linkedProvider]);
+
   const linkedCaseFields = currentCase ? getCaseCustomFields(currentCase) : {};
   const postmanCaseCfg = linkedCaseFields._postman || {};
   const datadogCaseCfg = linkedCaseFields._datadog || {};
@@ -4082,7 +4104,7 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                               <button
                                 type="button"
                                 onClick={() => setShowIterAssigneeDropdown(!showIterAssigneeDropdown)}
-                                className="h-7 px-2 rounded-lg border border-border/70 bg-card hover:bg-muted flex items-center gap-1.5 text-xs transition-all cursor-pointer shadow-2xs"
+                                className="h-7 px-3 rounded-lg border border-border/70 bg-card hover:bg-muted flex items-center gap-1.5 text-xs transition-all cursor-pointer shadow-2xs"
                                 title={activeIterUser ? `Iteration #${activeIterationIdx + 1} assigned to ${activeIterUser.name}` : `Iteration #${activeIterationIdx + 1} inherits case assignee (${caseAssigneeUser?.name || 'Unassigned'})`}
                               >
                                 {activeIterUser ? (
@@ -4508,7 +4530,9 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                           ? ` in request ${firstFailedRequest || 1} of ${requestCount}`
                           : ''
                       }`
-                    : (effectiveStatus === 'pending' && !isAwaitingExternal && !['RUNNING', 'QUEUED', 'WAITING'].includes(String(currentResult?.caseState || currentResult?.executionState || '').toUpperCase()) ? 'Not started' : 'Awaiting results');
+                    : (effectiveStatus === 'pending' && !isAwaitingExternal && !['RUNNING', 'QUEUED', 'WAITING'].includes(String(currentResult?.caseState || currentResult?.executionState || '').toUpperCase())
+                        ? (sessionStarted || currentResult?.startedAt ? 'In progress' : 'Not started')
+                        : 'Awaiting results');
                 return (
                   <div
                     className={cn(
@@ -5546,7 +5570,11 @@ export function ExecutionConsole(props: ExecutionConsoleProps) {
                         {run.name}
                       </h4>
                       <div className="flex items-center gap-2 text-[11px] text-muted-foreground pt-0.5">
-                        <ResultStatusBadge status={effectiveStatus} attemptNumber={currentResult.attemptNumber || 1} />
+                        <ResultStatusBadge
+                          status={effectiveStatus}
+                          attemptNumber={currentResult.attemptNumber || 1}
+                          started={sessionStarted || Boolean(currentResult.startedAt)}
+                        />
                         {currentResult.executedAt && (
                           <span suppressHydrationWarning>Executed at {new Date(currentResult.executedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         )}

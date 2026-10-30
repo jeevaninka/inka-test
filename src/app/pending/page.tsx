@@ -235,7 +235,7 @@ export default function PendingPage() {
               <Button
                 onClick={handleResendVerification}
                 disabled={isResending}
-                className="w-full h-12 rounded-xl text-base font-semibold btn-glow"
+                className="w-full h-12 rounded-xl text-base font-semibold gradient-btn text-white"
               >
                 {isResending ? (
                   <span className="flex items-center gap-2">
@@ -310,7 +310,7 @@ export default function PendingPage() {
               <Button
                 onClick={handleJoin}
                 disabled={isJoining}
-                className="w-full h-12 rounded-xl text-base font-semibold btn-glow"
+                className="w-full h-12 rounded-xl text-base font-semibold gradient-btn text-white"
               >
                 {isJoining ? (
                   <span className="flex items-center gap-2">
@@ -448,7 +448,7 @@ export default function PendingPage() {
               <Button
                 onClick={handleRequestAccess}
                 disabled={isSubmitting}
-                className="w-full h-12 rounded-xl text-base font-semibold btn-glow"
+                className="w-full h-12 rounded-xl text-base font-semibold gradient-btn text-white"
               >
                 {isSubmitting ? (
                   <span className="flex items-center gap-2">

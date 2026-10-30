@@ -28,14 +28,15 @@ import {
   ArrowRight,
   X,
   Building,
-  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useSession, signOut } from 'next-auth/react';
+import { navigateTo, type ModifierClickLike } from '@/lib/navigation';
+import Image from 'next/image';
 import { useMobileSidebar } from '@/components/providers/MobileSidebarProvider';
 import { UserAvatar } from '@/components/common/UserAvatar';
 import { CommandPalette } from '@/components/common/CommandPalette';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
+import { useSession, signOut } from 'next-auth/react';
 
 interface TopBarProps {
   breadcrumbs?: { label: string; href?: string }[];
@@ -214,9 +215,9 @@ export function TopBar({ breadcrumbs = [], className }: TopBarProps) {
     return results.slice(0, 7);
   }, [inlineQuery, cases, runs, suites, modules, slug]);
 
-  const handleSelectInlineResult = (url: string) => {
+  const handleSelectInlineResult = (url: string, event?: ModifierClickLike | null) => {
     if (url && url !== '#') {
-      router.push(url);
+      navigateTo(event, url, router.push);
     }
     setIsSearchFocused(false);
     setInlineQuery('');
@@ -262,8 +263,8 @@ export function TopBar({ breadcrumbs = [], className }: TopBarProps) {
             onClick={() => router.push('/projects')}
             className="flex items-center gap-2.5 group cursor-pointer"
           >
-            <div className="w-8 h-8 rounded-lg gradient-btn flex items-center justify-center shadow-glow-sm group-hover:shadow-glow-md transition-shadow duration-300">
-              <Sparkles className="h-4 w-4 text-white" />
+            <div className="w-8 h-8 rounded-lg overflow-visible shadow-glow-sm group-hover:shadow-glow-md transition-shadow duration-300">
+              <Image src="/logo.svg" alt="InkaTest" width={32} height={32} className="w-8 h-8 object-cover rounded-lg" />
             </div>
             <span className="text-xl font-bold gradient-text">InkaTest</span>
           </button>
@@ -333,7 +334,7 @@ export function TopBar({ breadcrumbs = [], className }: TopBarProps) {
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => handleSelectInlineResult(item.url)}
+                    onClick={(e) => handleSelectInlineResult(item.url, e)}
                     className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left hover:bg-muted/70 transition-colors group cursor-pointer"
                   >
                     <div className="w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center shrink-0 text-primary">
@@ -443,7 +444,7 @@ export function TopBar({ breadcrumbs = [], className }: TopBarProps) {
                 onClick={() => router.push('/platform-admin/organizations')}
                 className="gap-2 px-3 py-2 text-sm text-amber-400 hover:text-amber-300 cursor-pointer rounded-xl"
               >
-                <Zap className="h-4 w-4" />
+                <Image src="/logo.svg" alt="InkaTest" width={20} height={20} className="w-5 h-5 object-cover" />
                 Platform Admin
               </DropdownMenuItem>
             )}

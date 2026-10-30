@@ -202,6 +202,13 @@ function formatHumanActivityText(action: string, entityType: string, entityName?
   const matchExecuted = text.match(/Executed test case ["“](.+?)["”]/i);
   if (matchExecuted) return `Executed a Test Case - ${matchExecuted[1]}`;
 
+  // Run lifecycle audit entries (C7).
+  const matchRunArchived = text.match(/Archived test run ["“](.+?)["”]/i);
+  if (matchRunArchived) return `Archived a Test Run - ${matchRunArchived[1]}`;
+
+  const matchRunRestored = text.match(/Restored test run ["“](.+?)["”]/i);
+  if (matchRunRestored) return `Restored a Test Run - ${matchRunRestored[1]}`;
+
   const cleanAction = action.replace(/["“”]/g, '');
   if (entityName) return `${cleanAction} - ${entityName}`;
   return cleanAction;

@@ -1,10 +1,11 @@
 "use client";
 
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
 import { apiClient } from '@/lib/apiClient';
+import { subscribeRunEvents, type RunSnapshotHint } from '@/lib/runs/run-events-bus';
 import { Loader2 } from 'lucide-react';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ExecutionConsole } from './ExecutionConsole';
@@ -80,6 +81,11 @@ export default function RunExecutionPage() {
     queryFn: () => getTestRunByIdAction(runId),
     enabled: !!runId,
     initialData: contextRun ?? undefined,
+    // The context snapshot is a paint aid only. Treat it as already stale so the
+    // server copy always wins on mount: an optimistically inserted run would
+    // otherwise keep the header on the client's guess (and show different
+    // Start/Finish actions) until the 30s window expired.
+    initialDataUpdatedAt: 0,
     staleTime: 30_000,
   });
   const run = runQuery.data ?? contextRun;
@@ -109,11 +115,26 @@ export default function RunExecutionPage() {
 
   const getCase = useCallback((id: string) => cases.find((c: any) => c.id === id), [cases]);
 
+  // Live events, the fallback poll and manual actions can all request a
+  // refresh at once; collapse them into a single in-flight request. `refetch`
+  // is referentially stable, so this callback does not churn the subscription
+  // effect that depends on it.
+  const refetchResultsQuery = resultsQuery.refetch;
+  const refreshInFlight = useRef<Promise<void> | null>(null);
   const refetchResults = useCallback(async () => {
     apiClient.invalidate(`/api/v1/runs/${encodeURIComponent(runId)}/results`);
-    const { data } = await resultsQuery.refetch();
-    if (data) setResults(data);
-  }, [resultsQuery, runId, setResults]);
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const pending = (async () => {
+      try {
+        const { data } = await refetchResultsQuery();
+        if (data) setResults(data);
+      } finally {
+        refreshInFlight.current = null;
+      }
+    })();
+    refreshInFlight.current = pending;
+    return pending;
+  }, [refetchResultsQuery, runId, setResults]);
 
   const refreshRun = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: ['run', runId] });
@@ -130,48 +151,67 @@ export default function RunExecutionPage() {
       ['RUNNING', 'QUEUED'].includes(String(r.caseState || '').toUpperCase())
   );
 
-  // Real-time updates: authenticated SSE carries invalidation events; the
-  // database snapshot (fetched on every event) stays authoritative. A 15s
-  // fallback poll covers multi-instance deployments and reconnect gaps.
+  // Live updates: a single shared SSE connection per run carries snapshot
+  // invalidations; the database snapshot stays authoritative. Identical
+  // snapshot versions are dropped inside the bus, so an idle run costs nothing.
+  // Results are refetched on every change, but the run header (a separate
+  // server-action round-trip) only when the run's own status moved.
   // Execution itself is server-side — this effect never dispatches work.
+  const lastRunHint = useRef<{ status: string | null; stopRequestedAt: string | null } | null>(null);
+  const resultsFetchingRef = useRef(false);
+  resultsFetchingRef.current = resultsQuery.isFetching;
+  const resultsUpdatedAtRef = useRef(0);
+  resultsUpdatedAtRef.current = resultsQuery.dataUpdatedAt;
+
   useEffect(() => {
     if (!isExternalRun || !runId) return;
     let cancelled = false;
-    let lastVersion = '';
 
-    const applySnapshot = async () => {
+    const applySnapshot = async (snapshot?: RunSnapshotHint) => {
       if (cancelled) return;
+      // The snapshot the server sends on connect usually lands right after the
+      // initial query fetch; refetching again would double the page-load calls.
+      const alreadyFetching = resultsFetchingRef.current;
+      const dataIsFresh = Date.now() - resultsUpdatedAtRef.current < 1500;
+      if (!alreadyFetching && !dataIsFresh) {
+        try {
+          await refetchResults();
+        } catch {
+          // transient failures are expected; the next tick retries
+        }
+      }
+      if (cancelled || !snapshot) return;
+
+      const next = {
+        status: snapshot.status ?? null,
+        stopRequestedAt: snapshot.stopRequestedAt ?? null,
+      };
+      const previous = lastRunHint.current;
+      if (
+        previous &&
+        previous.status === next.status &&
+        previous.stopRequestedAt === next.stopRequestedAt
+      ) {
+        return;
+      }
+      lastRunHint.current = next;
+
       try {
-        await refetchResults();
         await queryClient.invalidateQueries({ queryKey: ['run', runId] });
       } catch {
-        // transient failures are expected; the next tick retries
+        // header refresh is best effort; the next status change retries
       }
     };
 
-    const source = new EventSource(
-      `/api/v1/runs/${encodeURIComponent(runId)}/events`
-    );
-    source.addEventListener('snapshot', (event) => {
-      try {
-        const payload = JSON.parse((event as MessageEvent).data);
-        if (payload?.version && payload.version === lastVersion) return;
-        lastVersion = String(payload?.version || '');
-      } catch {
-        // malformed event: still refresh
-      }
-      void applySnapshot();
-    });
-    // Browser reconnects automatically and the next snapshot repairs state.
-    source.addEventListener('error', () => {});
+    const unsubscribe = subscribeRunEvents(runId, (snapshot) => {
+      void applySnapshot(snapshot);
+    }, { poll: hasLiveCases });
 
-    if (hasLiveCases) void applySnapshot();
-    const fallback = hasLiveCases ? setInterval(() => void applySnapshot(), 15000) : null;
-
+    // No initial fetch here: the results query fetches on mount, and the bus
+    // delivers the snapshot the server sends on connect.
     return () => {
       cancelled = true;
-      source.close();
-      if (fallback) clearInterval(fallback);
+      unsubscribe();
     };
   }, [isExternalRun, hasLiveCases, refetchResults, runId, queryClient]);
 
@@ -207,6 +247,20 @@ export default function RunExecutionPage() {
   }, [results]);
 
   const resultId = searchParams.get('resultId');
+
+  // Closing the console is announced twice — Radix `onOpenChange(false)` and the
+  // console's own close handler (Escape fires both). Run the side effects once.
+  const closingConsole = useRef(false);
+  useEffect(() => {
+    if (resultId) closingConsole.current = false;
+  }, [resultId]);
+  const closeConsole = useCallback(() => {
+    if (closingConsole.current) return;
+    closingConsole.current = true;
+    apiClient.invalidate(`/api/v1/runs/${encodeURIComponent(runId)}/results`);
+    router.push(`/p/${slug}/runs/${runId}`, { scroll: false });
+    void refetchResults();
+  }, [refetchResults, router, runId, slug]);
 
   useEffect(() => {
     if (resultId && results.length > 0) {
@@ -264,11 +318,7 @@ export default function RunExecutionPage() {
       <Dialog
         open={!!resultId}
         onOpenChange={(open) => {
-          if (!open) {
-            apiClient.invalidate(`/api/v1/runs/${encodeURIComponent(runId)}/results`);
-            router.push(`/p/${slug}/runs/${runId}`, { scroll: false });
-            refetchResults();
-          }
+          if (!open) closeConsole();
         }}
       >
         <DialogContent hideClose className="max-w-[1600px] w-[94vw] h-[90vh] max-h-[90vh] p-0 overflow-hidden flex flex-col border-white/10 bg-background/95 backdrop-blur-xl shadow-2xl rounded-2xl">
@@ -289,9 +339,7 @@ export default function RunExecutionPage() {
               suites={suites as any[]}
               modules={modules as any[]}
               onClose={() => {
-                apiClient.invalidate(`/api/v1/runs/${encodeURIComponent(runId)}/results`);
-                router.push(`/p/${slug}/runs/${runId}`, { scroll: false });
-                refetchResults();
+                closeConsole();
               }}
             />
           )}

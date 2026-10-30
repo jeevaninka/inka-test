@@ -3213,7 +3213,19 @@ export async function linkTestCaseToExternalSourceAction(data: {
     name?: string;
     testType?: 'api' | 'browser';
   };
-}) {
+  /**
+   * When the external key is already linked to another case, pass that case's
+   * id to move the link here instead of blocking.
+   */
+  moveLinkFromCaseId?: string;
+}): Promise<
+  | { linkKey: string; stepsCount: number; movedFromCaseId?: string }
+  | {
+      blocked: true;
+      linkKey: string;
+      conflict: { caseId: string; displayId: string; title: string };
+    }
+> {
   const session = await getServerSession(authOptions);
   if (!session?.user) throw new Error('Unauthorized');
 
@@ -3275,6 +3287,59 @@ export async function linkTestCaseToExternalSourceAction(data: {
     delete customFields._postman;
   }
 
+  /* ── External key uniqueness ─────────────────────────────────────────
+     One external test maps to one case. Without this check two cases can point
+     at the same Postman request / Datadog test, and a run then reports the same
+     provider result twice. */
+  const conflictFilters: any[] = [
+    { custom_fields: { path: ['_postman', 'linkKey'], equals: linkKey } },
+    { custom_fields: { path: ['_datadog', 'linkKey'], equals: linkKey } },
+  ];
+  if (data.provider === 'datadog' && data.datadog?.publicId) {
+    conflictFilters.push({
+      custom_fields: { path: ['_datadog', 'publicIds'], array_contains: [data.datadog.publicId] },
+    });
+  }
+
+  const conflicting = await prisma.testCase.findFirst({
+    where: {
+      project_id: actualProjectId,
+      deleted_at: null,
+      id: { not: tc.id },
+      OR: conflictFilters,
+    },
+    select: { id: true, display_id: true, title: true, custom_fields: true },
+  });
+
+  if (conflicting && conflicting.id !== data.moveLinkFromCaseId) {
+    return {
+      blocked: true as const,
+      linkKey,
+      conflict: {
+        caseId: conflicting.id,
+        displayId: conflicting.display_id,
+        title: conflicting.title,
+      },
+    };
+  }
+
+  let movedFromCaseId: string | undefined;
+  if (conflicting) {
+    // "Move link…" — detach the key from the other case, keeping everything
+    // else it has (datasets, steps, history) intact.
+    const otherFields =
+      conflicting.custom_fields && typeof conflicting.custom_fields === 'object'
+        ? { ...(conflicting.custom_fields as Record<string, any>) }
+        : {};
+    if (data.provider === 'postman') delete otherFields._postman;
+    else delete otherFields._datadog;
+    await prisma.testCase.update({
+      where: { id: conflicting.id },
+      data: { custom_fields: otherFields, updated_by: userId },
+    });
+    movedFromCaseId = conflicting.id;
+  }
+
   await prisma.testCase.update({
     where: { id: tc.id },
     data: { custom_fields: customFields, updated_by: userId },
@@ -3292,7 +3357,7 @@ export async function linkTestCaseToExternalSourceAction(data: {
   }
 
   revalidatePath('/p');
-  return { linkKey, stepsCount };
+  return { linkKey, stepsCount, movedFromCaseId };
 }
 
 /**
@@ -3580,12 +3645,32 @@ export interface ExternalImportSkipped {
 export async function importExternalTestCasesAction(data: {
   projectId: string;
   cases: ExternalImportCaseInput[];
+  /** Optional destination suite: imported cases are linked in import order. */
+  suiteId?: string;
 }): Promise<{ created: any[]; skipped: ExternalImportSkipped[] }> {
   const session = await getServerSession(authOptions);
   if (!session?.user) throw new Error('Unauthorized');
 
   const userId = (session.user as any).id as number;
   const actualProjectId = await requireProjectMember(data.projectId, userId);
+
+  // Resolve the destination suite up front: a stale or cross-project id must
+  // fail loudly instead of silently importing unlinked cases.
+  let suiteId: string | null = null;
+  let nextSuiteOrder = 0;
+  if (data.suiteId) {
+    const suite = await prisma.testSuite.findFirst({
+      where: { id: data.suiteId, project_id: actualProjectId, deleted_at: null },
+      select: { id: true },
+    });
+    if (!suite) throw new Error('Suite not found in this project');
+    suiteId = suite.id;
+    const maxOrder = await prisma.suiteCase.aggregate({
+      where: { suite_id: suite.id },
+      _max: { order_index: true },
+    });
+    nextSuiteOrder = (maxOrder._max.order_index ?? -1) + 1;
+  }
 
   const existing = await prisma.testCase.findMany({
     where: { project_id: actualProjectId, deleted_at: null },
@@ -3664,6 +3749,18 @@ export async function importExternalTestCasesAction(data: {
       for (const key of keys) {
         if (key && !existingByKey.has(key)) existingByKey.set(key, ref);
       }
+    }
+
+    // Link into the chosen suite in import order. Duplicates skipped above are
+    // deliberately left alone: their suite membership is existing state.
+    if (suiteId) {
+      await prisma.suiteCase.create({
+        data: {
+          suite_id: suiteId,
+          test_case_id: saved.id,
+          order_index: nextSuiteOrder++,
+        },
+      });
     }
 
     created.push({

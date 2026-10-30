@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { useProjectData } from '@/components/providers/ProjectDataProvider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,6 +33,8 @@ import { PostmanLogo, DatadogLogo } from '@/components/icons/IntegrationLogos';
 import { toast } from 'sonner';
 import { cn, formatVariableName } from '@/lib/utils';
 import { createTestRunAction, validateRunPlanAction } from '@/app/actions/runs';
+import { EnvironmentDetailsFields } from '@/components/runs/EnvironmentDetailsFields';
+import { normalizeRunEnvironmentDetails, type RunEnvironmentDetails } from '@/lib/runs/environment';
 import { getSuiteCasesAction } from '@/app/actions/suites';
 import { getProjectReleasesAction } from '@/app/actions/releases';
 import { getEnvironmentsAction } from '@/app/actions/variables';
@@ -120,6 +123,8 @@ export interface CreateRunModalProps {
   runType?: 'manual' | 'postman' | 'datadog';
   initialSuiteId?: string | null;
   initialReleaseId?: string | null;
+  /** Preselect specific cases and open the "Pick cases" tab. */
+  initialCaseIds?: string[];
   /** Opens the import dialog for items that are not in the repository yet. */
   onRequestImport?: (provider: 'postman' | 'datadog') => void;
 }
@@ -131,9 +136,11 @@ export function CreateRunModal({
   runType = 'manual',
   initialSuiteId,
   initialReleaseId,
+  initialCaseIds,
   onRequestImport,
 }: CreateRunModalProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { project, suites, cases: allCases, modules, members, currentUser, runs, setRuns } = useProjectData();
 
   const todayStr = useMemo(() => formatTodayDdMmYyyy(), []);
@@ -258,6 +265,11 @@ export function CreateRunModal({
     environment: 'UAT',
     environmentId: '',
   });
+
+  // Where this run executes (C8). Optional and collapsed: most runs only need
+  // the named environment.
+  const [showEnvironmentDetails, setShowEnvironmentDetails] = useState(false);
+  const [environmentDetails, setEnvironmentDetails] = useState<RunEnvironmentDetails>({});
 
   const environmentKey = (formData.environment || '').trim().toUpperCase();
 
@@ -669,6 +681,22 @@ export function CreateRunModal({
     }));
   }, [open, initialSuiteId, suitesWithCases, todayStr]);
 
+  // "Create run" from a case selection: open straight into Pick cases with the
+  // chosen cases ticked. Runs after the reset effect above so it wins.
+  useEffect(() => {
+    if (!open) return;
+    if (!initialCaseIds || initialCaseIds.length === 0) return;
+    setCaseTab('repository');
+    setSelectedCaseIds(new Set(initialCaseIds));
+    setFormData((prev) => ({
+      ...prev,
+      name: prev.name?.trim() && prev.name !== `Test Run - ${todayStr}`
+        ? prev.name
+        : `Test Run - ${todayStr}`,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialCaseIds?.join(',')]);
+
   // Silent pre-flight check (only shown if warnings exist)
   useEffect(() => {
     if (!open || !project?.id || selectedCaseIds.size === 0) {
@@ -1043,6 +1071,7 @@ export function CreateRunModal({
         environment: formData.environment || 'UAT',
         environmentId: formData.environmentId || undefined,
         source: formData.mode || 'manual',
+        environmentDetails: normalizeRunEnvironmentDetails(environmentDetails),
         createdBy: currentUser.id,
         testCaseIds: Array.from(selectedCaseIds),
         assignments: activeAssignments,
@@ -1078,6 +1107,12 @@ export function CreateRunModal({
         },
         ...runs,
       ]);
+
+      // Seed the run detail query with the persisted row (not the optimistic
+      // list entry) so the header renders the same actions before and after a
+      // hard refresh.
+      queryClient.setQueryData(['run', newRun.id], newRun);
+      queryClient.invalidateQueries({ queryKey: ['run-results', newRun.id] });
 
       toast.success('Run started');
       onOpenChange(false);
@@ -1160,6 +1195,8 @@ export function CreateRunModal({
 
       if (res?.createdRun) {
         setRuns([res.createdRun, ...(runs || [])]);
+        queryClient.setQueryData(['run', res.createdRun.id], res.createdRun);
+        queryClient.invalidateQueries({ queryKey: ['run-results', res.createdRun.id] });
       }
       toast.success(res?.startError ? 'Run created (start pending)' : 'Run started');
       if (res?.startError) toast.error(res.startError);
@@ -1785,6 +1822,34 @@ export function CreateRunModal({
                   className="h-9 text-xs"
                 />
               </div>
+            </div>
+
+            {/* Where this run executes (C8). Collapsed: only exceptional runs
+                need to record platform/OS/browser/device explicitly. */}
+            <div className="rounded-xl border border-border/60 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowEnvironmentDetails((v) => !v)}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold hover:bg-muted/30 cursor-pointer"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Layers className="h-3.5 w-3.5" />
+                  Environment details
+                </span>
+                <span className="flex items-center gap-2 text-[11px] font-normal text-muted-foreground">
+                  <span>Optional</span>
+                  <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showEnvironmentDetails && 'rotate-180')} />
+                </span>
+              </button>
+              {showEnvironmentDetails && (
+                <div className="px-3 pb-3 pt-2.5 border-t border-border/40">
+                  <EnvironmentDetailsFields
+                    value={environmentDetails}
+                    onChange={setEnvironmentDetails}
+                    showHeading={false}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Run-level automated settings. Collapsed by default: the run

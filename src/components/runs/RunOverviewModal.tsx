@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { ProgressCircle } from '@/components/common/ProgressCircle';
 import { UserAvatar } from '@/components/common/UserAvatar';
 import { cn, formatDuration } from '@/lib/utils';
+import { subscribeRunEvents } from '@/lib/runs/run-events-bus';
 import type { TeamProgressRow } from '@/lib/runs/team-progress';
 
 interface TeamProgressModalProps {
@@ -58,8 +59,9 @@ function relativeTime(iso?: string | null): string {
 
 function TeamRing({ row }: { row: TeamProgressRow }) {
   const executed = row.passed + row.failed + row.blocked;
+  const pct = row.total > 0 ? Math.round((executed / row.total) * 100) : 0;
   return (
-    <div className="flex items-center gap-1.5 shrink-0">
+    <div className="flex items-center justify-center gap-1.5 shrink-0">
       <ProgressCircle
         size={26}
         strokeWidth={3}
@@ -72,11 +74,14 @@ function TeamRing({ row }: { row: TeamProgressRow }) {
           total: row.total,
         }}
         centerContent={
-          <span className="text-[9px] font-bold font-mono text-foreground leading-none">
-            {executed}/{row.total}
+          <span className="text-[7px] font-bold font-mono text-foreground leading-none">
+            {pct}%
           </span>
         }
       />
+      <span className="text-[10px] font-mono text-muted-foreground shrink-0">
+        {executed}/{row.total}
+      </span>
     </div>
   );
 }
@@ -110,8 +115,8 @@ function TeamRow({
       <td className="px-3 py-2 pl-4 w-[160px]">
         <div className="flex items-center gap-2 min-w-0">
           {isUnassigned ? (
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-amber-500/50 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
-              ?
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-muted-foreground/50 text-muted-foreground">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
             </span>
           ) : (
             <UserAvatar
@@ -127,39 +132,38 @@ function TeamRow({
         </div>
       </td>
 
-      {/* 2. Progress */}
-      <td className="px-2 py-2 w-[100px]">
+      <td className="px-2 py-2 w-[120px]">
         <TeamRing row={row} />
       </td>
 
       {/* 3. Passed */}
-      <td className="px-2 py-2 text-right font-mono tabular-nums w-[56px]">
+      <td className="px-2 py-2 text-center font-mono tabular-nums w-[56px]">
         <span className={row.passed > 0 ? 'text-foreground font-semibold' : 'text-muted-foreground'}>
           {row.passed}
         </span>
       </td>
 
       {/* 4. Failed */}
-      <td className="px-2 py-2 text-right font-mono tabular-nums w-[56px]">
+      <td className="px-2 py-2 text-center font-mono tabular-nums w-[56px]">
         <span className={row.failed > 0 ? 'text-rose-500 font-semibold' : 'text-muted-foreground'}>
           {row.failed}
         </span>
       </td>
 
       {/* 5. Blocked */}
-      <td className="px-2 py-2 text-right font-mono tabular-nums w-[60px]">
+      <td className="px-2 py-2 text-center font-mono tabular-nums w-[60px]">
         <span className={row.blocked > 0 ? 'text-amber-500 font-semibold' : 'text-muted-foreground'}>
           {row.blocked}
         </span>
       </td>
 
       {/* 6. Pending */}
-      <td className="px-2 py-2 text-right font-mono tabular-nums text-muted-foreground w-[60px]">
+      <td className="px-2 py-2 text-center font-mono tabular-nums text-muted-foreground w-[60px]">
         {row.pending}
       </td>
 
       {/* 7. Duration */}
-      <td className="px-2 py-2 text-right font-mono tabular-nums text-muted-foreground w-[70px]">
+      <td className="px-2 py-2 text-center font-mono tabular-nums text-muted-foreground w-[70px]">
         {timeSpent}
       </td>
 
@@ -232,40 +236,29 @@ export function TeamProgressModal({
     [onSelectAssignee, onOpenChange]
   );
 
-  // Live updates while open; 15s poll covers reconnect gaps.
+  // Live updates while open, through the shared per-run events bus so the modal
+  // never opens a second EventSource alongside the run page.
+  const onRefreshRef = useRef(onRefresh);
+  onRefreshRef.current = onRefresh;
+
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    let lastRunAt = 0;
-
-    const refresh = () => {
-      if (cancelled) return;
-      const now = Date.now();
-      if (now - lastRunAt < 400) return;
-      lastRunAt = now;
-      void onRefresh();
-    };
-
-    const source = new EventSource(`/api/v1/runs/${encodeURIComponent(runId)}/events`);
-    source.addEventListener('snapshot', () => {
-      refresh();
-    });
-    source.addEventListener('error', () => {});
-    const poll = window.setInterval(refresh, 15_000);
-
-    return () => {
-      cancelled = true;
-      source.close();
-      window.clearInterval(poll);
-    };
-  }, [open, runId, onRefresh]);
+    if (!open || !runId) return;
+    const unsubscribe = subscribeRunEvents(
+      runId,
+      () => {
+        void onRefreshRef.current();
+      },
+      { poll: true }
+    );
+    return unsubscribe;
+  }, [open, runId]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          // Desktop (>= 900px): Centered 800px wide modal (max 80vh height)
-          'fixed left-[50%] top-[50%] z-50 grid w-full max-w-[800px] max-h-[80vh] translate-x-[-50%] translate-y-[-50%] bg-background border border-border/80 shadow-2xl rounded-2xl overflow-hidden will-change-[transform,opacity]',
+          // Desktop (>= 900px): Centered modal width
+          'fixed left-[50%] top-[50%] z-50 grid w-full max-w-[950px] max-h-[85vh] translate-x-[-50%] translate-y-[-50%] bg-background border border-border/80 shadow-2xl rounded-2xl overflow-hidden will-change-[transform,opacity]',
           // Mobile (< 900px): Fullscreen sheet
           'max-[899px]:inset-0 max-[899px]:left-auto max-[899px]:top-auto max-[899px]:translate-none max-[899px]:w-full max-[899px]:h-screen max-[899px]:max-h-none max-[899px]:rounded-none max-[899px]:border-0',
           // Animations
@@ -300,17 +293,17 @@ export function TeamProgressModal({
               <thead>
                 <tr className="border-b border-border/60 bg-muted/30 [&_th]:text-[10px] [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <th className="px-3 py-2.5 text-left w-[160px] pl-4">Tester</th>
-                  <th className="px-2 py-2.5 text-left w-[100px]">Progress</th>
-                  <th className="px-2 py-2.5 text-right w-[56px]">Passed</th>
-                  <th className="px-2 py-2.5 text-right w-[56px]">Failed</th>
-                  <th className="px-2 py-2.5 text-right w-[60px]">Blocked</th>
-                  <th className="px-2 py-2.5 text-right w-[60px]">Pending</th>
-                  <th className="px-2 py-2.5 text-right w-[70px]">Duration</th>
+                  <th className="px-2 py-2.5 text-center w-[120px]">Progress</th>
+                  <th className="px-2 py-2.5 text-center w-[56px]">Passed</th>
+                  <th className="px-2 py-2.5 text-center w-[56px]">Failed</th>
+                  <th className="px-2 py-2.5 text-center w-[60px]">Blocked</th>
+                  <th className="px-2 py-2.5 text-center w-[60px]">Pending</th>
+                  <th className="px-2 py-2.5 text-center w-[70px]">Duration</th>
                   {!narrow && (
-                    <th className="px-2 py-2.5 text-right w-[66px]">Avg/case</th>
+                    <th className="px-2 py-2.5 text-center w-[66px]">Avg/case</th>
                   )}
                   {!narrow && (
-                    <th className="px-3 py-2.5 text-right w-[72px] pr-4">Active</th>
+                    <th className="px-3 py-2.5 text-center w-[72px] pr-4">Active</th>
                   )}
                 </tr>
               </thead>
@@ -343,8 +336,8 @@ export function TeamProgressModal({
               </tbody>
               <tfoot>
                 <tr className="border-t border-border/60 bg-muted/20 font-semibold text-xs [&_td]:text-[10px] [&_td]:uppercase [&_td]:tracking-wider [&_td]:text-muted-foreground">
-                  <td className="px-3 py-2.5 pl-4 w-[160px]">Totals</td>
-                  <td className="px-2 py-2.5 w-[100px]">
+                  <td className="px-3 py-2.5 pl-4 w-[160px]">TOTAL</td>
+                  <td className="px-2 py-2.5 w-[120px]">
                     <TeamRing
                       row={{
                         id: 'totals',
@@ -363,23 +356,23 @@ export function TeamProgressModal({
                       }}
                     />
                   </td>
-                  <td className="px-2 py-2.5 text-right font-mono tabular-nums text-foreground w-[56px]">
+                  <td className="px-2 py-2.5 text-center font-mono tabular-nums text-foreground w-[56px]">
                     {totals.passed}
                   </td>
-                  <td className={cn('px-2 py-2.5 text-right font-mono tabular-nums w-[56px]', totals.failed === 0 ? 'text-muted-foreground' : 'text-rose-500 font-semibold')}>
+                  <td className={cn('px-2 py-2.5 text-center font-mono tabular-nums w-[56px]', totals.failed === 0 ? 'text-muted-foreground' : 'text-rose-500 font-semibold')}>
                     {totals.failed}
                   </td>
-                  <td className={cn('px-2 py-2.5 text-right font-mono tabular-nums w-[60px]', totals.blocked === 0 ? 'text-muted-foreground' : 'text-amber-500 font-semibold')}>
+                  <td className={cn('px-2 py-2.5 text-center font-mono tabular-nums w-[60px]', totals.blocked === 0 ? 'text-muted-foreground' : 'text-amber-500 font-semibold')}>
                     {totals.blocked}
                   </td>
-                  <td className="px-2 py-2.5 text-right font-mono tabular-nums text-muted-foreground w-[60px]">
+                  <td className="px-2 py-2.5 text-center font-mono tabular-nums text-muted-foreground w-[60px]">
                     {totals.pending}
                   </td>
-                  <td className="px-2 py-2.5 text-right font-mono tabular-nums text-muted-foreground w-[70px]">
+                  <td className="px-2 py-2.5 text-center font-mono tabular-nums text-muted-foreground w-[70px]">
                     {anyTimeSpent ? formatDuration(totals.executedSeconds) : '—'}
                   </td>
-                  {!narrow && <td className="px-2 py-2.5 text-right font-mono tabular-nums text-muted-foreground w-[66px]">—</td>}
-                  {!narrow && <td className="px-3 py-2.5 pr-4 text-right font-mono tabular-nums text-muted-foreground w-[72px]">—</td>}
+                  {!narrow && <td className="px-2 py-2.5 text-center font-mono tabular-nums text-muted-foreground w-[66px]">—</td>}
+                  {!narrow && <td className="px-3 py-2.5 pr-4 text-center font-mono tabular-nums text-muted-foreground w-[72px]">—</td>}
                 </tr>
               </tfoot>
             </table>

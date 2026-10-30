@@ -694,12 +694,6 @@ export function TestCaseParametersSection({
                                       title="Customize prompt or boundary constraints"
                                     >
                                       <span>{activeAiBlockId === block.id ? 'Custom' : 'Auto'}</span>
-                                      <ChevronDown
-                                        className={cn(
-                                          'h-2.5 w-2.5 transition-transform duration-150',
-                                          activeAiBlockId === block.id && 'rotate-180'
-                                        )}
-                                      />
                                     </button>
                                   </div>
                                 )}
@@ -965,12 +959,6 @@ export function TestCaseParametersSection({
                                 title="Customize prompt or boundary constraints"
                               >
                                 <span>{activeAiBlockId === block.id ? 'Custom' : 'Auto'}</span>
-                                <ChevronDown
-                                  className={cn(
-                                    'h-2.5 w-2.5 transition-transform duration-150',
-                                    activeAiBlockId === block.id && 'rotate-180'
-                                  )}
-                                />
                               </button>
                             </div>
                           )}

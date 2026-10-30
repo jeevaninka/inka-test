@@ -3,18 +3,23 @@ frontend:
   phases:
     preBuild:
       commands:
+        # Node version comes from .nvmrc (20) + the Amplify build image.
+        # pnpm is pinned by "packageManager" in package.json, so CI and local
+        # installs resolve the exact same package manager version.
         - corepack enable
-        - corepack prepare pnpm@latest --activate
+        - corepack install
         - pnpm config set store-dir .pnpm-store
         - pnpm install --frozen-lockfile
         # Generate the Prisma client for the Amplify runtime (see binaryTargets
         # in prisma/schema.prisma: native + rhel-openssl-3.0.x).
-        - npx prisma generate
+        - pnpm exec prisma generate
     build:
       commands:
         # Inject server-side runtime environment variables for Next.js SSR compute
         # (AWS Amplify WEB_COMPUTE). Only variables that exist on the branch are written.
-        - env | grep -E '^(DATABASE_URL|NEXTAUTH_|ENCRYPTION_KEY|GOOGLE_|GEMINI_|AI_|EMAIL_|SMTP_|MAIL_FROM|SES_|AWS_SES_|S3_|SLACK_|APP_ENV|LOG_LEVEL|NEXT_PUBLIC_)' >> .env.production || true
+        # NOTE: DIRECT_URL is deliberately NOT injected - it is only used by the
+        # migration workflow and must never be reachable from application code.
+        - env | grep -E '^(DATABASE_URL|DATABASE_CONNECTION_LIMIT|NEXTAUTH_|ENCRYPTION_KEY|GOOGLE_|GEMINI_|AI_|EMAIL_|SMTP_|MAIL_FROM|SES_|AWS_SES_|S3_|SLACK_|APP_ENV|LOG_LEVEL|LOGIN_RATE_LIMIT_|IMPORT_|EXECUTION_TICK_SECRET|NEXT_PUBLIC_)' >> .env.production || true
         # NOTE: database migrations are intentionally NOT run here.
         # Running `prisma migrate deploy` inside the build races parallel/duplicate
         # builds and mutates the database even when the subsequent build fails,
@@ -29,4 +34,3 @@ frontend:
     paths:
       - .next/cache/**/*
       - .pnpm-store/**/*
-      - node_modules/**/*

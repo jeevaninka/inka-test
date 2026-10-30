@@ -53,6 +53,7 @@ export function LinkExternalSourceDialog({
   const [selectedPublicId, setSelectedPublicId] = useState('');
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [conflict, setConflict] = useState<{ caseId: string; displayId: string; title: string } | null>(null);
 
   useEffect(() => {
     if (!open || !projectId) return;
@@ -64,6 +65,7 @@ export function LinkExternalSourceDialog({
     setCollectionUid('');
     setRequests([]);
     setSearch('');
+    setConflict(null);
     getProjectRunnerCatalogAction(projectId)
       .then((res: any) => {
         if (cancelled) return;
@@ -126,18 +128,20 @@ export function LinkExternalSourceDialog({
   const canLink =
     provider === 'postman' ? Boolean(collectionUid && selectedOrder !== null) : Boolean(selectedPublicId);
 
-  const handleLink = async () => {
+  const handleLink = async (moveLinkFromCaseId?: string) => {
     if (!canLink) return;
     setSaving(true);
+    setConflict(null);
     try {
       if (provider === 'postman') {
         const request = requests.find((r) => r.order === selectedOrder);
         if (!request) throw new Error('Select a Postman request');
         const collection = collections.find((c) => c.uid === collectionUid || c.id === collectionUid);
-        await linkTestCaseToExternalSourceAction({
+        const res = await linkTestCaseToExternalSourceAction({
           projectId,
           testCaseId,
           provider: 'postman',
+          moveLinkFromCaseId,
           postman: {
             collectionUid,
             collectionName: collection?.name,
@@ -151,21 +155,38 @@ export function LinkExternalSourceDialog({
             requestSpec: request.requestSpec,
           },
         });
+        if ('blocked' in res) {
+          setConflict(res.conflict);
+          return;
+        }
         const synced = await syncTestCaseFromPostmanAction({ projectId, testCaseId });
-        toast.success(`Linked to Postman and pulled ${synced.stepsCount} step(s).`);
+        toast.success(
+          res.movedFromCaseId
+            ? `Moved the link to this case and pulled ${synced.stepsCount} step(s).`
+            : `Linked to Postman and pulled ${synced.stepsCount} step(s).`
+        );
       } else {
         const test = datadogTests.find((t) => t.public_id === selectedPublicId);
         const result = await linkTestCaseToExternalSourceAction({
           projectId,
           testCaseId,
           provider: 'datadog',
+          moveLinkFromCaseId,
           datadog: {
             publicId: selectedPublicId,
             name: test?.name,
             testType: test?.type === 'browser' ? 'browser' : 'api',
           },
         });
-        toast.success(`Linked to Datadog and pulled ${result.stepsCount} step(s).`);
+        if ('blocked' in result) {
+          setConflict(result.conflict);
+          return;
+        }
+        toast.success(
+          result.movedFromCaseId
+            ? `Moved the link to this case and pulled ${result.stepsCount} step(s).`
+            : `Linked to Datadog and pulled ${result.stepsCount} step(s).`
+        );
       }
       onLinked?.();
       onOpenChange(false);
@@ -315,13 +336,50 @@ export function LinkExternalSourceDialog({
           )}
         </div>
 
+        {conflict && (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 space-y-2">
+            <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">
+              This external test is already linked to another case
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              <span className="font-mono font-semibold text-foreground">{conflict.displayId}</span>{' '}
+              — {conflict.title}. Each external test can drive only one case, otherwise a run would
+              report the same result twice.
+            </p>
+            <div className="flex items-center gap-2 pt-0.5">
+              <Button
+                size="sm"
+                className="h-7 px-2.5 text-xs gap-1.5"
+                disabled={saving}
+                onClick={() => void handleLink(conflict.caseId)}
+              >
+                {saving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Link2 className="h-3.5 w-3.5" />
+                )}
+                Move link to this case
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                onClick={() => setConflict(null)}
+                disabled={saving}
+              >
+                Keep both
+              </Button>
+            </div>
+          </div>
+        )}
+
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
           <Button
             size="sm"
-            onClick={handleLink}
+            onClick={() => void handleLink()}
             disabled={!canLink || saving}
             className="gap-1.5"
           >

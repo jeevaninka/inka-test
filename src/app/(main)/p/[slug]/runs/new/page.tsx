@@ -12,6 +12,11 @@ export default function NewRunPage() {
   const urlSuiteId = searchParams.get('suiteId');
   const urlReleaseId = searchParams.get('releaseId');
   const urlType = searchParams.get('type');
+  const urlCases = searchParams.get('cases');
+  const initialCaseIds = (urlCases || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
   const runType: 'manual' | 'postman' | 'datadog' =
     urlType === 'postman' || urlType === 'datadog' ? urlType : 'manual';
 
@@ -33,6 +38,7 @@ export default function NewRunPage() {
       runType={runType}
       initialSuiteId={urlSuiteId}
       initialReleaseId={urlReleaseId}
+      initialCaseIds={initialCaseIds}
     />
   );
 }

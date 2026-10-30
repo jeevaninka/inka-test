@@ -2,7 +2,8 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { Building2, ArrowRight, Plus, Sparkles, FolderKanban, Shield, Search, Check, Zap } from 'lucide-react';
+import Image from 'next/image';
+import { Building2, ArrowRight, Plus, Sparkles, FolderKanban, Shield, Search, Check, UserCog } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -130,7 +131,7 @@ export function WorkspacesClient({
                 variant="outline"
                 className="border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/15 text-amber-400 gap-2 cursor-pointer"
               >
-                <Zap className="h-4 w-4" />
+                <UserCog className="h-4 w-4 text-amber-400" />
                 <span>Platform Admin</span>
               </Button>
             )}

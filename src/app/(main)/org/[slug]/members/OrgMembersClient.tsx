@@ -519,7 +519,7 @@ export function OrgMembersClient({
             <Button
               onClick={handleSaveAccess}
               disabled={isSavingAccess}
-              className="btn-glow"
+              className="gradient-btn text-white"
             >
               {isSavingAccess ? 'Saving…' : 'Save Access'}
             </Button>
